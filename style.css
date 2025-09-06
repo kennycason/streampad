@@ -1,0 +1,229 @@
+/* DDR-Style Controller Input Logger CSS */
+
+/* CSS Variables for Neon Colors */
+:root {
+    --neon-cyan: #00FFFF;
+    --neon-pink: #FF1493;
+    --neon-blue: #0080FF;
+    --neon-green: #32CD32;
+    --neon-purple: #4B0082;
+    --neon-yellow: #FFFF00;
+    --neon-orange: #FF4500;
+    --bg-black: #000000;
+    --bg-dark: #0a0a0a;
+    --bg-darker: #050505;
+    --text-white: #FFFFFF;
+    --text-gray: #CCCCCC;
+}
+
+/* Global Styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Courier New', monospace;
+    background: var(--bg-black);
+    color: var(--text-white);
+    overflow-x: hidden;
+    min-height: 100vh;
+    position: relative;
+    margin: 0;
+    padding: 0;
+}
+
+
+
+/* DDR View */
+.ddr-view {
+    padding: 1rem;
+    min-height: 100vh;
+    overflow: hidden;
+    position: relative;
+}
+
+.ddr-lanes {
+    display: flex;
+    height: calc(100vh - 40px);
+    gap: 2px;
+    justify-content: center;
+    align-items: flex-end;
+    min-height: calc(100vh - 40px);
+}
+
+.ddr-lane {
+    flex: 1;
+    max-width: 100px;
+    height: 100%;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: calc(100vh - 40px);
+}
+
+
+.lane-track {
+    flex: 1;
+    width: 100%;
+    min-height: calc(100vh - 120px);
+    height: calc(100vh - 120px);
+    background: linear-gradient(
+        to bottom,
+        rgba(255, 255, 255, 0.05) 0%,
+        rgba(255, 255, 255, 0.02) 50%,
+        rgba(255, 255, 255, 0.1) 100%
+    );
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0;
+    position: relative;
+    overflow: hidden;
+    backdrop-filter: blur(5px);
+}
+
+.lane-button {
+    width: 100%;
+    height: 60px;
+    border-radius: 0;
+    border: 3px solid #333;
+    background: var(--bg-darker);
+    transition: all 0.1s ease;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 16px;
+    color: var(--text-white);
+    margin-top: 5px;
+}
+
+.lane-button.active {
+    border-color: var(--neon-cyan);
+    box-shadow: 0 0 20px var(--neon-cyan);
+    background: var(--neon-cyan);
+    color: #000;
+    transform: scale(1.1);
+}
+
+.ddr-note {
+    position: absolute;
+    width: calc(100% - 6px);
+    left: 3px;
+    border-radius: 0;
+    box-shadow: 0 0 15px currentColor;
+    border: 2px solid currentColor;
+    backdrop-filter: blur(3px);
+    z-index: 10;
+    bottom: 70px; /* Start just above the button */
+    font-weight: bold;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #000;
+    animation: ddrScroll linear forwards;
+    opacity: 1;
+}
+
+@keyframes ddrScroll {
+    0% {
+        transform: translateY(0);
+        opacity: 1;
+    }
+    10% {
+        opacity: 1;
+    }
+    90% {
+        opacity: 0.9;
+    }
+    100% {
+        transform: translateY(-90vh);
+        opacity: 0.3;
+    }
+}
+
+/* Vibration effect for intense inputs */
+.intense-vibration {
+    animation: intenseShake 0.2s ease-in-out;
+}
+
+@keyframes intenseShake {
+    0%, 100% { transform: translateX(0); }
+    10% { transform: translateX(-3px) rotateZ(-1deg); }
+    20% { transform: translateX(3px) rotateZ(1deg); }
+    30% { transform: translateX(-3px) rotateZ(-1deg); }
+    40% { transform: translateX(3px) rotateZ(1deg); }
+    50% { transform: translateX(-2px) rotateZ(-0.5deg); }
+    60% { transform: translateX(2px) rotateZ(0.5deg); }
+    70% { transform: translateX(-1px); }
+    80% { transform: translateX(1px); }
+    90% { transform: translateX(-1px); }
+}
+
+.mega-vibration {
+    animation: megaShake 0.3s ease-in-out;
+}
+
+@keyframes megaShake {
+    0%, 100% { transform: translateX(0); }
+    5% { transform: translateX(-5px) rotateZ(-2deg); }
+    10% { transform: translateX(5px) rotateZ(2deg); }
+    15% { transform: translateX(-5px) rotateZ(-2deg); }
+    20% { transform: translateX(5px) rotateZ(2deg); }
+    25% { transform: translateX(-4px) rotateZ(-1.5deg); }
+    30% { transform: translateX(4px) rotateZ(1.5deg); }
+    35% { transform: translateX(-4px) rotateZ(-1.5deg); }
+    40% { transform: translateX(4px) rotateZ(1.5deg); }
+    45% { transform: translateX(-3px) rotateZ(-1deg); }
+    50% { transform: translateX(3px) rotateZ(1deg); }
+    55% { transform: translateX(-3px) rotateZ(-1deg); }
+    60% { transform: translateX(3px) rotateZ(1deg); }
+    65% { transform: translateX(-2px) rotateZ(-0.5deg); }
+    70% { transform: translateX(2px) rotateZ(0.5deg); }
+    75% { transform: translateX(-2px) rotateZ(-0.5deg); }
+    80% { transform: translateX(2px) rotateZ(0.5deg); }
+    85% { transform: translateX(-1px); }
+    90% { transform: translateX(1px); }
+    95% { transform: translateX(-1px); }
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+    .ddr-lanes {
+        gap: 1px;
+    }
+    
+    .ddr-lane {
+        max-width: 80px;
+    }
+}
+
+@media (max-width: 768px) {
+    .ddr-lane {
+        max-width: 60px;
+    }
+    
+    .lane-button {
+        height: 50px;
+        font-size: 14px;
+    }
+}
+
+@media (max-width: 480px) {
+    .ddr-view {
+        padding: 0.5rem;
+    }
+    
+    .ddr-lane {
+        max-width: 50px;
+    }
+    
+    .lane-button {
+        height: 40px;
+        font-size: 12px;
+    }
+}
