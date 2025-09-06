@@ -29,6 +29,7 @@ class ControllerInputLogger {
         
         // DDR specific
         this.ddrNotes = new Map(); // Map of active notes
+        this.activeNotes = new Map(); // Map of currently growing notes
         this.noteColors = {
             '14': '#FF1493', // LEFT - Pink
             '12': '#00FFFF', // UP - Cyan
@@ -38,10 +39,10 @@ class ControllerInputLogger {
             '5': '#4B0082',  // R1 - Purple
             '8': '#0080FF',  // SELECT - Blue
             '9': '#FF69B4',  // START - Hot Pink
-            '2': '#0080FF',  // X - Blue
-            '3': '#FFFF00',  // Y - Yellow
-            '1': '#FF1493',  // B - Pink
-            '0': '#32CD32'   // A - Green
+            '3': '#0080FF',  // Y - Blue (swapped with X)
+            '2': '#FFFF00',  // X - Yellow (swapped with Y)
+            '1': '#FF1493',  // B - Pink (swapped with A)
+            '0': '#32CD32'   // A - Green (swapped with B)
         };
         
         this.init();
@@ -243,11 +244,12 @@ class ControllerInputLogger {
                 axisMapping: {
                     left: { min: 0.5, max: 1.0 },
                     right: { min: -0.6, max: -0.2 },
-                    down: { min: 0.1, max: 0.3 }
+                    down: { min: 0.1, max: 0.3 },
+                    up: { min: -1.0, max: -0.5 } // Try UP on horizontal axis too
                 },
                 verticalAxis: {
                     down: { min: 0.3 },
-                    up: { min: -0.3 }
+                    up: { min: -0.5 }
                 },
                 buttons: {
                     up: 12,
@@ -450,6 +452,21 @@ class ControllerInputLogger {
         const axes = gamepad.axes;
         const currentTime = Date.now();
         
+        // Debug axis values occasionally
+        if (Math.random() < 0.01) {
+            console.log('Axis values - H:', axes[config.axes.horizontal]?.toFixed(3), 'V:', axes[config.axes.vertical]?.toFixed(3));
+            // Also log all button states for debugging
+            const pressedButtons = [];
+            for (let i = 0; i < gamepad.buttons.length; i++) {
+                if (gamepad.buttons[i].pressed) {
+                    pressedButtons.push(i);
+                }
+            }
+            if (pressedButtons.length > 0) {
+                console.log('Pressed buttons:', pressedButtons);
+            }
+        }
+        
         // Handle horizontal axis
         if (axes[config.axes.horizontal] !== undefined) {
             const hValue = axes[config.axes.horizontal];
@@ -475,15 +492,28 @@ class ControllerInputLogger {
                 this.onButtonRelease('15');
                 this.lastGamepadAxes.right = false;
             }
+            
+            // Check for UP on horizontal axis (some controllers map it here)
+            if (config.axisMapping.up && hValue >= config.axisMapping.up.min && hValue <= config.axisMapping.up.max) {
+                if (!this.lastGamepadAxes.upHorizontal) {
+                    console.log('D-pad UP detected via horizontal axis:', hValue);
+                    this.onButtonPress('12', currentTime); // D-pad up
+                    this.lastGamepadAxes.upHorizontal = true;
+                }
+            } else if (this.lastGamepadAxes.upHorizontal) {
+                this.onButtonRelease('12');
+                this.lastGamepadAxes.upHorizontal = false;
+            }
         }
         
         // Handle vertical axis
         if (axes[config.axes.vertical] !== undefined) {
             const vValue = axes[config.axes.vertical];
             
-            // Check for up
+            // Check for up - try both vertical axis and button
             if (config.verticalAxis && vValue <= config.verticalAxis.up.min) {
                 if (!this.lastGamepadAxes.up) {
+                    console.log('D-pad UP detected via axis:', vValue);
                     this.onButtonPress('12', currentTime); // D-pad up
                     this.lastGamepadAxes.up = true;
                 }
@@ -502,6 +532,28 @@ class ControllerInputLogger {
                 this.onButtonRelease('13');
                 this.lastGamepadAxes.down = false;
             }
+        }
+        
+        // Also check D-pad buttons directly (fallback) - try multiple button indices
+        const buttons = gamepad.buttons;
+        const upButtonIndices = [config.buttons.up, 12, 0, 1, 2, 3]; // Try multiple indices
+        
+        let upDetected = false;
+        for (const buttonIndex of upButtonIndices) {
+            if (buttons[buttonIndex] && buttons[buttonIndex].pressed) {
+                if (!this.lastGamepadAxes.upButton) {
+                    console.log('D-pad UP detected via button index:', buttonIndex);
+                    this.onButtonPress('12', currentTime);
+                    this.lastGamepadAxes.upButton = true;
+                }
+                upDetected = true;
+                break;
+            }
+        }
+        
+        if (!upDetected && this.lastGamepadAxes.upButton) {
+            this.onButtonRelease('12');
+            this.lastGamepadAxes.upButton = false;
         }
         
         // For SNES/Switch special handling
@@ -543,8 +595,7 @@ class ControllerInputLogger {
         // Create DDR note
         this.createDDRNote(buttonId, timestamp);
         
-        // Add vibration effect based on press frequency
-        this.addVibrationEffect(buttonId);
+        // Vibration effects removed for cleaner experience
     }
     
     onButtonRelease(buttonId) {
@@ -555,16 +606,16 @@ class ControllerInputLogger {
     }
     
     activateButton(buttonId) {
-        // Activate DDR lane button
+        // Activate DDR lane button with enhanced glow
         const lane = this.lanes[buttonId];
         if (lane) {
             lane.button.classList.add('active');
             const color = this.noteColors[buttonId];
             lane.button.style.background = color;
             lane.button.style.borderColor = color;
-            lane.button.style.boxShadow = `0 0 25px ${color}`;
+            lane.button.style.boxShadow = `0 0 35px ${color}, 0 0 60px ${color}`; // Enhanced glow
             lane.button.style.color = '#000'; // Black text for visibility
-            lane.button.style.transform = 'scale(1.1)';
+            lane.button.style.transform = 'scale(1.15)';
         }
     }
     
@@ -601,72 +652,85 @@ class ControllerInputLogger {
         note.className = 'ddr-note';
         note.style.background = this.noteColors[buttonId] || '#FFFFFF';
         note.style.borderColor = this.noteColors[buttonId] || '#FFFFFF';
-        note.style.color = '#000'; // Black text for visibility
-        note.style.height = '30px'; // Initial height
+        note.style.height = '25px'; // Initial height
+        note.style.bottom = '5px'; // Start much closer to button
         
-        // Add button label to the note
-        const buttonLabels = {
-            '14': '◀', '12': '▲', '15': '▶', '13': '▼',
-            '4': 'L1', '5': 'R1', '8': 'SLCT', '9': 'STRT',
-            '2': 'X', '3': 'Y', '1': 'B', '0': 'A'
-        };
-        note.textContent = buttonLabels[buttonId] || buttonId;
+        // No text content - just color
         
         // Position the note in the lane track
         lane.track.appendChild(note);
         
         // Store note info for tracking
-        this.ddrNotes.set(noteId, {
+        const noteData = {
             element: note,
             buttonId,
             startTime: timestamp,
-            endTime: null
-        });
+            endTime: null,
+            isGrowing: true
+        };
         
-        // Calculate animation duration - now that tracks have proper height
-        const duration = 4000; // 4 seconds to scroll from bottom to top
+        this.ddrNotes.set(noteId, noteData);
+        this.activeNotes.set(buttonId, noteData); // Track as active/growing
         
-        // Set animation duration
-        note.style.animationDuration = `${duration}ms`;
+        // Start the growth and movement animation
+        this.startNoteAnimation(noteData);
+    }
+    
+    startNoteAnimation(noteData) {
+        const startTime = Date.now();
+        const scrollSpeed = 0.15; // pixels per millisecond (slower scroll)
+        const growthRate = 0.08; // height increase per millisecond while held
+        let initialBottom = 5;
+        let grownHeight = 0;
         
-        // Remove note after animation completes
-        setTimeout(() => {
-            if (note.parentNode) {
-                note.parentNode.removeChild(note);
+        const animate = () => {
+            if (!noteData.element.parentNode) return; // Note was removed
+            
+            const elapsed = Date.now() - startTime;
+            
+            // If still growing (button held), increase height downward
+            if (noteData.isGrowing) {
+                grownHeight = elapsed * growthRate;
+                const newHeight = 25 + grownHeight;
+                noteData.element.style.height = `${newHeight}px`;
+                // Keep bottom position fixed while growing
+                noteData.element.style.bottom = `${initialBottom}px`;
+            } else {
+                // Once released, start moving upward while maintaining height
+                const newBottom = initialBottom + ((elapsed - (grownHeight / growthRate)) * scrollSpeed);
+                noteData.element.style.bottom = `${newBottom}px`;
             }
-            this.ddrNotes.delete(noteId);
-        }, duration);
+            
+            // Remove note when it goes off screen
+            const trackHeight = noteData.element.parentNode.offsetHeight;
+            const currentBottom = parseFloat(noteData.element.style.bottom) || initialBottom;
+            if (currentBottom > trackHeight + 100) {
+                if (noteData.element.parentNode) {
+                    noteData.element.parentNode.removeChild(noteData.element);
+                }
+                this.ddrNotes.delete(`${noteData.buttonId}-${noteData.startTime}`);
+                return;
+            }
+            
+            // Continue animation
+            requestAnimationFrame(animate);
+        };
+        
+        requestAnimationFrame(animate);
     }
     
     endDDRNote(buttonId) {
-        const currentTime = Date.now();
-        
-        // Find the most recent active note for this button
-        let mostRecentNote = null;
-        let mostRecentTime = 0;
-        
-        for (let [noteId, noteData] of this.ddrNotes) {
-            if (noteData.buttonId === buttonId && noteData.endTime === null && noteData.startTime > mostRecentTime) {
-                mostRecentNote = noteData;
-                mostRecentTime = noteData.startTime;
-            }
-        }
-        
-        if (mostRecentNote) {
-            mostRecentNote.endTime = currentTime;
-            const duration = currentTime - mostRecentNote.startTime;
+        // Stop growing the active note for this button
+        const activeNote = this.activeNotes.get(buttonId);
+        if (activeNote) {
+            activeNote.isGrowing = false;
+            activeNote.endTime = Date.now();
+            this.activeNotes.delete(buttonId);
             
-            // Extend note height based on press duration
-            const minHeight = 25;
-            const maxHeight = 150;
-            const heightMultiplier = Math.min(duration / 1000, 4); // Max 4 seconds for scaling
-            const newHeight = minHeight + (heightMultiplier * (maxHeight - minHeight) / 4);
-            
-            mostRecentNote.element.style.height = `${newHeight}px`;
-            
-            // Add extra glow for long presses
-            if (duration > 1000) {
-                mostRecentNote.element.style.boxShadow = `0 0 25px ${this.noteColors[buttonId]}`;
+            // Add extra glow for the final note
+            const duration = activeNote.endTime - activeNote.startTime;
+            if (duration > 500) {
+                activeNote.element.style.boxShadow = `0 0 20px ${this.noteColors[buttonId]}`;
             }
         }
     }
@@ -676,35 +740,6 @@ class ControllerInputLogger {
         // Currently, notes are handled by CSS animations and timers
     }
     
-    addVibrationEffect(buttonId) {
-        const currentTime = Date.now();
-        this.cleanPressHistory(buttonId, currentTime);
-        
-        const pressCount = this.buttonPressHistory[buttonId].length;
-        const frequency = pressCount / (this.frequencyWindow / 1000);
-        
-        // Add vibration based on frequency
-        if (frequency > 6) {
-            document.body.classList.add('mega-vibration');
-            setTimeout(() => document.body.classList.remove('mega-vibration'), 300);
-        } else if (frequency > 3) {
-            document.body.classList.add('intense-vibration');
-            setTimeout(() => document.body.classList.remove('intense-vibration'), 200);
-        }
-        
-        // Also check for really long presses
-        const currentNote = Array.from(this.ddrNotes.values()).find(note => 
-            note.buttonId === buttonId && note.endTime === null
-        );
-        
-        if (currentNote) {
-            const pressDuration = currentTime - currentNote.startTime;
-            if (pressDuration > 2000) { // Really long press (2+ seconds)
-                document.body.classList.add('mega-vibration');
-                setTimeout(() => document.body.classList.remove('mega-vibration'), 200);
-            }
-        }
-    }
     
     updateStats() {
         // Stats removed for minimal interface
