@@ -31,18 +31,18 @@ class ControllerInputLogger {
         this.ddrNotes = new Map(); // Map of active notes
         this.activeNotes = new Map(); // Map of currently growing notes
         this.noteColors = {
-            '14': '#FF1493', // LEFT - Pink
+            '14': '#FF1493', // LEFT - Deep Pink
             '12': '#00FFFF', // UP - Cyan
-            '15': '#32CD32', // RIGHT - Green
-            '13': '#FFFF00', // DOWN - Yellow
-            '4': '#FF4500',  // L1 - Orange
-            '5': '#4B0082',  // R1 - Purple
-            '8': '#0080FF',  // SELECT - Blue
+            '15': '#32CD32', // RIGHT - Lime Green
+            '13': '#FFD700', // DOWN - Gold
+            '4': '#FF4500',  // L1 - Orange Red
+            '5': '#9400D3',  // R1 - Violet
+            '8': '#1E90FF',  // SELECT - Dodger Blue
             '9': '#FF69B4',  // START - Hot Pink
-            '3': '#0080FF',  // Y - Blue (swapped with X)
-            '2': '#FFFF00',  // X - Yellow (swapped with Y)
-            '0': '#32CD32',  // B - Green (SNES Switch controller)
-            '1': '#FF1493'   // A - Pink (SNES Switch controller)
+            '3': '#4169E1',  // Y - Royal Blue
+            '2': '#FFFF00',  // X - Yellow
+            '0': '#00FF7F',  // B - Spring Green
+            '1': '#FF6347'   // A - Tomato Red
         };
         
         this.init();
@@ -666,7 +666,7 @@ class ControllerInputLogger {
         note.className = 'ddr-note';
         note.style.background = this.noteColors[buttonId] || '#FFFFFF';
         note.style.borderColor = this.noteColors[buttonId] || '#FFFFFF';
-        note.style.height = '25px'; // Initial height
+        note.style.height = '8px'; // Initial height (smaller for quick taps)
         note.style.bottom = '5px'; // Start much closer to button
         
         // No text content - just color
@@ -705,7 +705,7 @@ class ControllerInputLogger {
             // If still growing (button held), increase height downward
             if (noteData.isGrowing) {
                 grownHeight = elapsed * growthRate;
-                const newHeight = 25 + grownHeight;
+                const newHeight = 8 + grownHeight;
                 noteData.element.style.height = `${newHeight}px`;
                 // Keep bottom position fixed while growing
                 noteData.element.style.bottom = `${initialBottom}px`;
