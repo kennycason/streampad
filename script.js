@@ -41,8 +41,8 @@ class ControllerInputLogger {
             '9': '#FF69B4',  // START - Hot Pink
             '3': '#0080FF',  // Y - Blue (swapped with X)
             '2': '#FFFF00',  // X - Yellow (swapped with Y)
-            '1': '#FF1493',  // B - Pink (swapped with A)
-            '0': '#32CD32'   // A - Green (swapped with B)
+            '0': '#32CD32',  // B - Green (SNES Switch controller)
+            '1': '#FF1493'   // A - Pink (SNES Switch controller)
         };
         
         this.init();
@@ -500,9 +500,13 @@ class ControllerInputLogger {
                     this.onButtonPress('12', currentTime); // D-pad up
                     this.lastGamepadAxes.upHorizontal = true;
                 }
-            } else if (this.lastGamepadAxes.upHorizontal) {
-                this.onButtonRelease('12');
-                this.lastGamepadAxes.upHorizontal = false;
+            } else {
+                // Always check for release when not in UP range
+                if (this.lastGamepadAxes.upHorizontal) {
+                    console.log('D-pad UP released (horizontal axis)');
+                    this.onButtonRelease('12');
+                    this.lastGamepadAxes.upHorizontal = false;
+                }
             }
         }
         
@@ -517,9 +521,13 @@ class ControllerInputLogger {
                     this.onButtonPress('12', currentTime); // D-pad up
                     this.lastGamepadAxes.up = true;
                 }
-            } else if (this.lastGamepadAxes.up) {
-                this.onButtonRelease('12');
-                this.lastGamepadAxes.up = false;
+            } else {
+                // Always check for release when not in UP range
+                if (this.lastGamepadAxes.up) {
+                    console.log('D-pad UP released (vertical axis)');
+                    this.onButtonRelease('12');
+                    this.lastGamepadAxes.up = false;
+                }
             }
             
             // Check for down
@@ -534,9 +542,9 @@ class ControllerInputLogger {
             }
         }
         
-        // Also check D-pad buttons directly (fallback) - try multiple button indices
+        // Also check D-pad buttons directly (fallback) - only check actual D-pad button indices
         const buttons = gamepad.buttons;
-        const upButtonIndices = [config.buttons.up, 12, 0, 1, 2, 3]; // Try multiple indices
+        const upButtonIndices = [config.buttons.up, 12]; // Only check D-pad specific buttons, not face buttons
         
         let upDetected = false;
         for (const buttonIndex of upButtonIndices) {
@@ -551,7 +559,9 @@ class ControllerInputLogger {
             }
         }
         
+        // Always check for button release when no UP button is detected
         if (!upDetected && this.lastGamepadAxes.upButton) {
+            console.log('D-pad UP released (button fallback)');
             this.onButtonRelease('12');
             this.lastGamepadAxes.upButton = false;
         }
@@ -599,10 +609,14 @@ class ControllerInputLogger {
     }
     
     onButtonRelease(buttonId) {
+        console.log('🎮 Button', buttonId, 'released');
         this.deactivateButton(buttonId);
         
         // End DDR note
         this.endDDRNote(buttonId);
+        
+        // Clear from gamepad state tracking
+        delete this.lastGamepadState[buttonId];
     }
     
     activateButton(buttonId) {
@@ -769,6 +783,34 @@ class ControllerInputLogger {
         
         return buttonNames[buttonId] || `BTN${buttonId}`;
     }
+    
+    // Emergency cleanup method to fix stuck buttons
+    emergencyCleanup() {
+        console.log('🧹 Emergency cleanup - clearing all stuck states');
+        
+        // Clear all axis tracking
+        this.lastGamepadAxes = {};
+        
+        // Clear all button states
+        this.lastGamepadState = {};
+        
+        // End all active DDR notes
+        Object.keys(this.activeDDRNotes).forEach(buttonId => {
+            this.endDDRNote(buttonId);
+        });
+        
+        // Remove active classes from all buttons
+        document.querySelectorAll('.lane-button.active').forEach(button => {
+            button.classList.remove('active');
+            button.style.background = '';
+            button.style.borderColor = '';
+            button.style.boxShadow = '';
+            button.style.color = '';
+            button.style.transform = '';
+        });
+        
+        console.log('✅ Emergency cleanup completed');
+    }
 }
 
 // Initialize the controller logger when the page loads
@@ -778,11 +820,19 @@ window.addEventListener('load', () => {
     console.log('🌈 Connect a controller and start pressing buttons!');
 });
 
-// Add some fun console commands
+// Add some fun console commands and emergency cleanup
 window.addEventListener('load', () => {
     console.log('💡 Fun commands to try in console:');
     console.log('   controllerLogger.switchView("ddr") - Switch to DDR view');
     console.log('   controllerLogger.switchView("button") - Switch to button view');
     console.log('   controllerLogger.buttonPressCount - See button press counts');
     console.log('   controllerLogger.gamepadType - Current controller type');
+    console.log('   Press ESCAPE key to fix stuck buttons');
+    
+    // Add emergency cleanup on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            window.controllerLogger.emergencyCleanup();
+        }
+    });
 });
