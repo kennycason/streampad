@@ -620,16 +620,17 @@ class ControllerInputLogger {
     }
     
     activateButton(buttonId) {
-        // Activate DDR lane button with enhanced glow
+        // Activate DDR lane button with clean contained styling
         const lane = this.lanes[buttonId];
         if (lane) {
             lane.button.classList.add('active');
             const color = this.noteColors[buttonId];
             lane.button.style.background = color;
             lane.button.style.borderColor = color;
-            lane.button.style.boxShadow = `0 0 35px ${color}, 0 0 60px ${color}`; // Enhanced glow
             lane.button.style.color = '#000'; // Black text for visibility
-            lane.button.style.transform = 'scale(1.15)';
+            // Remove any scaling or glow that might cause overflow
+            lane.button.style.transform = '';
+            lane.button.style.boxShadow = '';
         }
     }
     
