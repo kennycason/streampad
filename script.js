@@ -39,8 +39,8 @@ class ControllerInputLogger {
             '5': '#9400D3',  // R1 - Violet
             '8': '#1E90FF',  // SELECT - Dodger Blue
             '9': '#FF69B4',  // START - Hot Pink
-            '3': '#4169E1',  // Y - Royal Blue
-            '2': '#FFFF00',  // X - Yellow
+            '2': '#4169E1',  // X - Royal Blue (swapped with Y)
+            '3': '#FFFF00',  // Y - Yellow (swapped with X)
             '0': '#00FF7F',  // B - Spring Green
             '1': '#FF6347'   // A - Tomato Red
         };
