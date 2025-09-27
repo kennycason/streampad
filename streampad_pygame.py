@@ -4,13 +4,26 @@ StreamPad - DDR-Style Controller Input Logger (Pygame Version)
 A visual controller input display for streaming overlays
 """
 
+import os
+# allow joystick events + polling while window is not focused
+os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
+
 import pygame
 import sys
 import time
 import math
+import threading
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
+
+# For global input detection
+try:
+    from pynput import mouse, keyboard
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    PYNPUT_AVAILABLE = False
+    print("⚠️ pynput not available - only detecting inputs when window is active")
 
 # Initialize Pygame
 pygame.init()
@@ -34,6 +47,8 @@ COLORS = {
         '13': (255, 215, 0),    # DOWN - Gold
         '4': (255, 69, 0),      # L1 - Orange Red
         '5': (148, 0, 211),     # R1 - Violet
+        '6': (255, 140, 0),     # ZL - Dark Orange
+        '7': (138, 43, 226),    # ZR - Blue Violet
         '8': (30, 144, 255),    # SELECT - Dodger Blue
         '9': (255, 105, 180),   # START - Hot Pink
         '2': (255, 255, 0),     # X - Yellow
@@ -46,11 +61,12 @@ COLORS = {
 # Button mappings - arrows will be drawn as triangles
 BUTTON_NAMES = {
     '14': 'LEFT', '12': 'UP', '15': 'RIGHT', '13': 'DOWN',  # Will draw triangles
-    '4': 'L1', '5': 'R1', '8': 'SLCT', '9': 'STRT',
+    '4': 'L1', '5': 'R1', '6': 'ZL', '7': 'ZR',  # Added ZL/ZR (L2/R2)
+    '8': 'SLCT', '9': 'STRT',
     '2': 'X', '3': 'Y', '0': 'B', '1': 'A'
 }
 
-BUTTON_ORDER = ['14', '12', '15', '13', '4', '5', '8', '9', '2', '3', '0', '1']
+BUTTON_ORDER = ['14', '12', '15', '13', '4', '5', '6', '7', '8', '9', '2', '3', '0', '1']
 
 @dataclass
 class DDRNote:
@@ -90,6 +106,7 @@ class StreamPadPygame:
         self.button_states: Dict[str, bool] = {}
         self.last_button_states: Dict[str, bool] = {}
         self.last_axis_states: Dict[str, bool] = {}  # For joystick diagonal detection
+        self.last_hat_state: Tuple[int, int] = (0, 0)  # dpad hat last state
         
         # DDR lanes
         self.lane_width = SCREEN_WIDTH // len(BUTTON_ORDER)
@@ -113,12 +130,183 @@ class StreamPadPygame:
         # UI state
         self.show_help = False  # Toggle help with H key
         
+        # Global input detection
+        self.global_input_enabled = True
+        self.global_input_thread = None
+        self.last_global_button_states: Dict[int, bool] = {}
+        self.last_global_hat_state: Tuple[int, int] = (0, 0)
+        self.global_input_lock = threading.Lock()
+        
         # Initialize controller detection (safe initial scan)
         self.initial_controller_scan()
+        
+        # Start global input monitoring
+        self.start_global_input_monitoring()
         
         print("🎮 StreamPad Pygame initialized!")
         print(f"🎯 Screen: {SCREEN_WIDTH}x{SCREEN_HEIGHT}")
         print(f"🎮 Controllers detected: {len(self.controllers)}")
+        if self.global_input_enabled:
+            print("🌍 Global input monitoring enabled - works even when window is not active!")
+    
+    def start_global_input_monitoring(self):
+        """Start background thread for global controller monitoring"""
+        if not self.global_input_enabled:
+            return
+            
+        self.global_input_thread = threading.Thread(
+            target=self.global_input_monitor_loop, 
+            daemon=True  # Dies when main program exits
+        )
+        self.global_input_thread.start()
+        
+    def global_input_monitor_loop(self):
+        """Background loop that monitors controller input globally"""
+        while self.global_input_enabled:
+            try:
+                if self.active_controller and self.active_controller.get_init():
+                    self.check_global_controller_input()
+                time.sleep(1/120)  # 120 FPS polling for responsive input
+            except Exception:
+                time.sleep(0.1)
+                
+    def check_global_controller_input(self):
+        """Check controller input globally (works when window not active)"""
+        try:
+            gamepad = self.active_controller
+            if not gamepad or not gamepad.get_init():
+                return
+                
+            # buttons
+            for i in range(gamepad.get_numbuttons()):
+                try:
+                    is_pressed = bool(gamepad.get_button(i))
+                    was_pressed = self.last_global_button_states.get(i, False)
+                    
+                    if is_pressed and not was_pressed:
+                        button_id = self.get_button_mapping(i)
+                        if button_id:
+                            with self.global_input_lock:
+                                self.on_button_press(button_id)
+                    
+                    if not is_pressed and was_pressed:
+                        button_id = self.get_button_mapping(i)
+                        if button_id:
+                            with self.global_input_lock:
+                                self.on_button_release(button_id)
+                    
+                    self.last_global_button_states[i] = is_pressed
+                except pygame.error:
+                    break  # controller changed
+                    
+            # hat (D-pad) — many Nintendo pads present D-pad here
+            self.check_global_hat()
+            
+            # axes for dpad (left stick fallback) + triggers
+            if self.controller_type != ControllerType.SNES_SWITCH:
+                self.check_global_joystick_axes()
+            self.check_global_trigger_axes()
+                
+        except Exception:
+            pass
+            
+    def check_global_hat(self):
+        """Poll D-pad hat globally and convert to presses."""
+        try:
+            if not self.active_controller or not self.active_controller.get_init():
+                return
+            if self.active_controller.get_numhats() <= 0:
+                return
+            hx, hy = self.active_controller.get_hat(0)  # (-1/0/1, -1/0/1)
+            # map to button IDs
+            desired = {
+                '14': hx < 0,  # LEFT
+                '15': hx > 0,  # RIGHT
+                '12': hy > 0,  # UP
+                '13': hy < 0,  # DOWN
+            }
+            previous = {
+                '14': self.last_hat_state[0] < 0,
+                '15': self.last_hat_state[0] > 0,
+                '12': self.last_hat_state[1] > 0,
+                '13': self.last_hat_state[1] < 0,
+            }
+            for bid in ['14', '15', '12', '13']:
+                if desired[bid] and not previous[bid]:
+                    with self.global_input_lock:
+                        self.on_button_press(bid)
+                if (not desired[bid]) and previous[bid]:
+                    with self.global_input_lock:
+                        self.on_button_release(bid)
+            self.last_hat_state = (hx, hy)
+            self.last_global_hat_state = (hx, hy)
+        except Exception:
+            pass
+
+    def check_global_trigger_axes(self):
+        """Map analog triggers to ZL/ZR when they are axes on some controllers."""
+        try:
+            if not self.active_controller or not self.active_controller.get_init():
+                return
+            axes = self.active_controller.get_numaxes()
+            if axes <= 2:
+                return
+            # Heuristic: common layouts
+            # PS pads: L2 ~ axis 4, R2 ~ axis 5 in [-1..1] (pressed -> +1)
+            # XInput: triggers may be combined or separate; leave as-is unless obvious
+            threshold = 0.5
+
+            def press_release(flag_key: str, pressed: bool, button_id: str):
+                was = self.last_axis_states.get(flag_key, False)
+                if pressed != was:
+                    if pressed:
+                        self.on_button_press(button_id)
+                    else:
+                        self.on_button_release(button_id)
+                    self.last_axis_states[flag_key] = pressed
+
+            if axes >= 5:
+                l2 = self.active_controller.get_axis(4)
+                press_release('zl_axis', l2 > threshold, '6')
+            if axes >= 6:
+                r2 = self.active_controller.get_axis(5)
+                press_release('zr_axis', r2 > threshold, '7')
+        except Exception:
+            pass
+            
+    def check_global_joystick_axes(self):
+        """Check joystick axes globally (similar to handle_joystick_axes)"""
+        try:
+            if not self.active_controller or not self.active_controller.get_init():
+                return
+            
+            if self.active_controller.get_numaxes() < 2:
+                return
+                
+            x_axis = self.active_controller.get_axis(0)
+            y_axis = self.active_controller.get_axis(1)
+            
+            deadzone = 0.5
+            
+            directions = [
+                ('left', x_axis < -deadzone, '14'),
+                ('right', x_axis > deadzone, '15'), 
+                ('up', y_axis < -deadzone, '12'),
+                ('down', y_axis > deadzone, '13')
+            ]
+            
+            for direction, pressed, button_id in directions:
+                was_pressed = self.last_axis_states.get(direction, False)
+                if pressed != was_pressed:
+                    with self.global_input_lock:
+                        if pressed:
+                            self.on_button_press(button_id)
+                        else:
+                            self.on_button_release(button_id)
+                    self.last_axis_states[direction] = pressed
+                    
+        except Exception:
+            pass
     
     def initial_controller_scan(self):
         """Initial safe controller scan (no quit/init cycle)"""
@@ -126,7 +314,6 @@ class StreamPadPygame:
             controller_count = pygame.joystick.get_count()
             print(f"🔍 Scanning for controllers... Found: {controller_count}")
             
-            # Initialize each controller
             for i in range(controller_count):
                 try:
                     controller = pygame.joystick.Joystick(i)
@@ -134,15 +321,13 @@ class StreamPadPygame:
                     self.controllers[i] = controller
                     
                     print(f"   Controller {i}: {controller.get_name()}")
+                    print(f"      Buttons: {controller.get_numbuttons()} | Axes: {controller.get_numaxes()} | Hats: {controller.get_numhats()}")
                     
-                    # Auto-select first controller if none selected
                     if self.active_controller is None:
                         self.active_controller = controller
                         self.controller_type = self.detect_controller_type(controller)
                         print(f"✅ Active controller: {controller.get_name()}")
                         print(f"   Type: {self.controller_type.value}")
-                        print(f"   Buttons: {controller.get_numbuttons()}")
-                        print(f"   Axes: {controller.get_numaxes()}")
                 
                 except pygame.error as e:
                     print(f"❌ Error initializing controller {i}: {e}")
@@ -155,10 +340,8 @@ class StreamPadPygame:
         print("🔄 Refreshing controller detection...")
         
         try:
-            # Clear button states first to prevent stuck buttons
             self.emergency_cleanup()
             
-            # Store current active controller info
             current_active_name = None
             if self.active_controller:
                 try:
@@ -166,7 +349,6 @@ class StreamPadPygame:
                 except:
                     pass
             
-            # Clear existing controllers safely
             for controller in list(self.controllers.values()):
                 try:
                     if controller.get_init():
@@ -176,11 +358,9 @@ class StreamPadPygame:
             self.controllers.clear()
             self.active_controller = None
             
-            # Get fresh controller count
             controller_count = pygame.joystick.get_count()
             print(f"🔍 Found {controller_count} controllers")
             
-            # Initialize each controller
             for i in range(controller_count):
                 try:
                     controller = pygame.joystick.Joystick(i)
@@ -189,28 +369,23 @@ class StreamPadPygame:
                     self.controllers[i] = controller
                     
                     print(f"   Controller {i}: {controller.get_name()}")
+                    print(f"      Buttons: {controller.get_numbuttons()} | Axes: {controller.get_numaxes()} | Hats: {controller.get_numhats()}")
                     
-                    # Try to reselect the same controller if it was active before
                     if current_active_name and controller.get_name() == current_active_name:
                         self.active_controller = controller
                         self.controller_type = self.detect_controller_type(controller)
                         print(f"✅ Reselected: {controller.get_name()}")
-                    
-                    # Auto-select first controller if none selected
                     elif self.active_controller is None:
                         self.active_controller = controller
                         self.controller_type = self.detect_controller_type(controller)
                         print(f"✅ Active controller: {controller.get_name()}")
                         print(f"   Type: {self.controller_type.value}")
-                        print(f"   Buttons: {controller.get_numbuttons()}")
-                        print(f"   Axes: {controller.get_numaxes()}")
                 
                 except pygame.error as e:
                     print(f"❌ Error initializing controller {i}: {e}")
                     
         except Exception as e:
             print(f"❌ Error in controller detection: {e}")
-            # Fallback: ensure we have a clean state
             self.controllers.clear()
             self.active_controller = None
     
@@ -247,42 +422,43 @@ class StreamPadPygame:
             9: '9',   # START (alternative mapping)
             10: '4',  # L1 (alternative mapping)
             11: '5',  # R1 (alternative mapping)
-            12: '12', # D-pad UP
-            13: '13', # D-pad DOWN
-            14: '14', # D-pad LEFT
-            15: '15', # D-pad RIGHT
+            # D-pad often NOT buttons; handled via hat.
+            # Keeping these for devices that *do* expose as buttons:
+            12: '12', # UP
+            13: '13', # DOWN
+            14: '14', # LEFT
+            15: '15', # RIGHT
         }
         
-        # Switch Pro Controller specific mapping (completely different layout!)
+        # Switch Pro Controller specific mapping
         if self.controller_type == ControllerType.SWITCH_PRO:
             mapping = {
-                0: '0',   # B (Nintendo layout - right button)
-                1: '1',   # A (Nintendo layout - bottom button)
-                2: '3',   # Y (Nintendo layout - left button)
-                3: '2',   # X (Nintendo layout - top button)
-                4: '4',   # L (left shoulder)
-                5: '5',   # R (right shoulder)
-                6: '4',   # ZL -> L1 (alternative)
-                7: '5',   # ZR -> R1 (alternative)
+                0: '0',   # B 
+                1: '1',   # A
+                2: '2',   # Y  
+                3: '3',   # X
+                4: '4',   # L1
+                5: '5',   # R1
+                6: '6',   # ZL (if button; else axis)
+                7: '7',   # ZR (if button; else axis)
                 8: '8',   # Minus/SELECT
                 9: '9',   # Plus/START
-                10: '4',  # L stick click -> L1 (alternative)
-                11: '5',  # R stick click -> R1 (alternative)
-                12: '12', # D-pad UP
-                13: '13', # D-pad DOWN
-                14: '14', # D-pad LEFT
-                15: '15', # D-pad RIGHT
-                16: '9',  # Home -> START (alternative)
-                17: '8',  # Capture -> SELECT (alternative)
+                10: '4',  # L stick click
+                11: '5',  # R stick click
+                # D-pad: prefer hat; keep for odd drivers:
+                12: '12', 13: '13', 14: '14', 15: '15',
             }
         
         # SNES Controller specific mapping
         elif self.controller_type == ControllerType.SNES_SWITCH:
             mapping.update({
                 0: '0',   # B (SNES layout)
-                1: '1',   # A (SNES layout)
-                2: '2',   # X (SNES layout)
-                3: '3',   # Y (SNES layout)
+                1: '1',   # A
+                2: '2',   # X
+                3: '3',   # Y
+                4: '4',   # L
+                5: '5',   # R
+                # D-pad via hat on this device
             })
         
         return mapping.get(pygame_button)
@@ -320,6 +496,34 @@ class StreamPadPygame:
                             self.on_button_release(button_id)
                 except (pygame.error, AttributeError):
                     pass  # Ignore errors from disconnected controllers
+
+            elif event.type == pygame.JOYHATMOTION:
+                # Convert hat x/y into d-pad button presses
+                try:
+                    if self.active_controller and event.joy == self.active_controller.get_instance_id():
+                        hx, hy = event.value  # (-1/0/1, -1/0/1)
+                        # compare to previous
+                        prevx, prevy = self.last_hat_state
+                        desired = {
+                            '14': hx < 0,
+                            '15': hx > 0,
+                            '12': hy > 0,
+                            '13': hy < 0,
+                        }
+                        previous = {
+                            '14': prevx < 0,
+                            '15': prevx > 0,
+                            '12': prevy > 0,
+                            '13': prevy < 0,
+                        }
+                        for bid in ['14', '15', '12', '13']:
+                            if desired[bid] and not previous[bid]:
+                                self.on_button_press(bid)
+                            if (not desired[bid]) and previous[bid]:
+                                self.on_button_release(bid)
+                        self.last_hat_state = (hx, hy)
+                except Exception:
+                    pass
             
             elif event.type == pygame.JOYDEVICEADDED:
                 print(f"🎮 Controller connected: {event.device_index}")
@@ -328,20 +532,18 @@ class StreamPadPygame:
             elif event.type == pygame.JOYDEVICEREMOVED:
                 print(f"🎮 Controller disconnected: {event.instance_id}")
                 try:
-                    # Safely handle controller removal
                     to_remove = []
                     for idx, controller in self.controllers.items():
                         try:
                             if controller.get_instance_id() == event.instance_id:
                                 to_remove.append(idx)
                         except:
-                            to_remove.append(idx)  # Remove if we can't check
+                            to_remove.append(idx)
                     
                     for idx in to_remove:
                         if idx in self.controllers:
                             del self.controllers[idx]
                     
-                    # If active controller was removed, find a new one
                     if self.active_controller:
                         try:
                             if self.active_controller.get_instance_id() == event.instance_id:
@@ -349,7 +551,6 @@ class StreamPadPygame:
                         except:
                             self.active_controller = None
                     
-                    # Select new active controller if available
                     if not self.active_controller and self.controllers:
                         self.active_controller = list(self.controllers.values())[0]
                         self.controller_type = self.detect_controller_type(self.active_controller)
@@ -360,6 +561,7 @@ class StreamPadPygame:
         # Handle joystick axes for diagonal detection (cool feature!)
         if self.active_controller:
             self.handle_joystick_axes()
+            self.handle_trigger_axes()
         
         return True
     
@@ -369,14 +571,12 @@ class StreamPadPygame:
             print("🎮 Only one controller available")
             return
         
-        # Find current controller index
         current_idx = None
         for idx, controller in self.controllers.items():
             if controller == self.active_controller:
                 current_idx = idx
                 break
         
-        # Switch to next controller
         controller_indices = sorted(self.controllers.keys())
         if current_idx is not None:
             current_pos = controller_indices.index(current_idx)
@@ -391,7 +591,6 @@ class StreamPadPygame:
         print(f"🔄 Switched to controller: {self.active_controller.get_name()}")
         print(f"   Type: {self.controller_type.value}")
         
-        # Clear states to prevent stuck buttons
         self.emergency_cleanup()
     
     def handle_joystick_axes(self):
@@ -399,16 +598,13 @@ class StreamPadPygame:
         if not self.active_controller:
             return
         
-        # Skip axis detection for SNES controllers (they have faulty axis readings)
+        # Skip axis -> dpad for SNES controllers (they use hats; axes can be noisy)
         if self.controller_type == ControllerType.SNES_SWITCH:
             return
         
-        # Get left stick axes (usually axes 0 and 1)
         try:
             if not self.active_controller.get_init():
                 return
-            
-            # Check if we have enough axes
             if self.active_controller.get_numaxes() < 2:
                 return
                 
@@ -417,45 +613,53 @@ class StreamPadPygame:
         except (pygame.error, AttributeError):
             return
         
-        # Deadzone threshold (larger to prevent false positives)
         deadzone = 0.5
         
-        # Check for diagonal movements and treat as D-pad presses
-        # Left stick left
-        left_pressed = x_axis < -deadzone
-        if left_pressed != self.last_axis_states.get('left', False):
-            if left_pressed:
-                self.on_button_press('14')  # D-pad left
-            else:
-                self.on_button_release('14')
-            self.last_axis_states['left'] = left_pressed
-        
-        # Left stick right  
+        left_pressed  = x_axis < -deadzone
         right_pressed = x_axis > deadzone
-        if right_pressed != self.last_axis_states.get('right', False):
-            if right_pressed:
-                self.on_button_press('15')  # D-pad right
-            else:
-                self.on_button_release('15')
-            self.last_axis_states['right'] = right_pressed
-        
-        # Left stick up
-        up_pressed = y_axis < -deadzone
-        if up_pressed != self.last_axis_states.get('up', False):
-            if up_pressed:
-                self.on_button_press('12')  # D-pad up
-            else:
-                self.on_button_release('12')
-            self.last_axis_states['up'] = up_pressed
-        
-        # Left stick down
-        down_pressed = y_axis > deadzone
-        if down_pressed != self.last_axis_states.get('down', False):
-            if down_pressed:
-                self.on_button_press('13')  # D-pad down
-            else:
-                self.on_button_release('13')
-            self.last_axis_states['down'] = down_pressed
+        up_pressed    = y_axis < -deadzone
+        down_pressed  = y_axis > deadzone
+
+        for key, pressed, bid in [
+            ('left', left_pressed, '14'),
+            ('right', right_pressed, '15'),
+            ('up', up_pressed, '12'),
+            ('down', down_pressed, '13'),
+        ]:
+            if pressed != self.last_axis_states.get(key, False):
+                if pressed:
+                    self.on_button_press(bid)
+                else:
+                    self.on_button_release(bid)
+                self.last_axis_states[key] = pressed
+
+    def handle_trigger_axes(self):
+        """Handle ZL/ZR when they are axes on some controllers (local event loop)."""
+        try:
+            if not self.active_controller or not self.active_controller.get_init():
+                return
+            axes = self.active_controller.get_numaxes()
+            if axes <= 2:
+                return
+            threshold = 0.5
+
+            def press_release(flag_key: str, pressed: bool, button_id: str):
+                was = self.last_axis_states.get(flag_key, False)
+                if pressed != was:
+                    if pressed:
+                        self.on_button_press(button_id)
+                    else:
+                        self.on_button_release(button_id)
+                    self.last_axis_states[flag_key] = pressed
+
+            if axes >= 5:
+                l2 = self.active_controller.get_axis(4)
+                press_release('zl_axis', l2 > threshold, '6')
+            if axes >= 6:
+                r2 = self.active_controller.get_axis(5)
+                press_release('zr_axis', r2 > threshold, '7')
+        except Exception:
+            pass
     
     def on_button_press(self, button_id: str):
         """Handle button press"""
@@ -468,7 +672,6 @@ class StreamPadPygame:
         self.button_press_count[button_id] = self.button_press_count.get(button_id, 0) + 1
         self.total_presses += 1
         
-        # Create DDR note
         self.create_ddr_note(button_id)
     
     def on_button_release(self, button_id: str):
@@ -479,8 +682,6 @@ class StreamPadPygame:
         print(f"🎮 Button {button_id} ({BUTTON_NAMES.get(button_id, button_id)}) released")
         
         self.button_states[button_id] = False
-        
-        # End DDR note growth
         self.end_ddr_note(button_id)
     
     def create_ddr_note(self, button_id: str):
@@ -491,9 +692,8 @@ class StreamPadPygame:
         lane_index = BUTTON_ORDER.index(button_id)
         x = lane_index * self.lane_width + 5
         width = self.lane_width - 10
-        height = self.min_note_height  # 8px initial height
+        height = self.min_note_height
         
-        # Start position: 5px from bottom (matching web version)
         y = self.lane_height - self.initial_bottom - height
         
         color = COLORS['button_colors'].get(button_id, (255, 255, 255))
@@ -502,7 +702,7 @@ class StreamPadPygame:
             x=x, y=y, width=width, height=height,
             color=color, button_id=button_id,
             start_time=time.time(),
-            initial_bottom=self.lane_height - self.initial_bottom  # Fixed bottom position
+            initial_bottom=self.lane_height - self.initial_bottom
         )
         
         self.notes.append(note)
@@ -523,26 +723,20 @@ class StreamPadPygame:
         
         for note in self.notes:
             if note.is_growing:
-                # Grow downward while button is held (matching web version)
-                elapsed_ms = (current_time - note.start_time) * 1000  # Convert to milliseconds
-                grown_height = elapsed_ms * (self.growth_rate / 1000)  # 0.08 pixels per millisecond
+                elapsed_ms = (current_time - note.start_time) * 1000
+                grown_height = elapsed_ms * (self.growth_rate / 1000)
                 new_height = self.min_note_height + grown_height
                 note.height = new_height
-                # Keep bottom position fixed while growing (grow downward)
                 note.y = note.initial_bottom - note.height
             else:
-                # Move upward after button release (matching web version)
                 if note.end_time:
                     elapsed_since_release_ms = (current_time - note.end_time) * 1000
-                    # 0.15 pixels per millisecond upward movement
                     upward_movement = elapsed_since_release_ms * (self.note_speed / 1000)
                     note.y = note.initial_bottom - note.height - upward_movement
                 
-                # Remove if off screen (matching web version logic)
-                if note.y + note.height < -100:  # Give some buffer like web version
+                if note.y + note.height < -100:
                     notes_to_remove.append(note)
         
-        # Remove off-screen notes
         for note in notes_to_remove:
             if note in self.notes:
                 self.notes.remove(note)
@@ -552,26 +746,22 @@ class StreamPadPygame:
         for i, button_id in enumerate(BUTTON_ORDER):
             x = i * self.lane_width
             
-            # Draw lane background
-            lane_rect = pygame.Rect(x, 0, self.lane_width, self.lane_height)
+            lane_rect = pygame.Rect(x, -10, self.lane_width, self.lane_height)
             pygame.draw.rect(self.screen, COLORS['lane_bg'], lane_rect)
             pygame.draw.rect(self.screen, COLORS['lane_border'], lane_rect, 2)
             
-            # Draw button at bottom
             button_rect = pygame.Rect(x + 5, self.lane_height, self.lane_width - 10, self.button_height)
             button_color = COLORS['lane_border']
             
-            # Highlight if pressed
             if self.button_states.get(button_id, False):
                 button_color = COLORS['button_colors'].get(button_id, (255, 255, 255))
             
             pygame.draw.rect(self.screen, button_color, button_rect)
             pygame.draw.rect(self.screen, COLORS['lane_border'], button_rect, 3)
             
-            # Draw button content (triangles for D-pad, text for others)
             text_color = (0, 0, 0) if self.button_states.get(button_id, False) else COLORS['text']
             
-            if button_id in ['12', '13', '14', '15']:  # D-pad buttons
+            if button_id in ['12', '13', '14', '15']:
                 self.draw_triangle(button_rect, button_id, text_color)
             else:
                 button_text = self.font.render(BUTTON_NAMES.get(button_id, button_id), True, text_color)
@@ -582,31 +772,31 @@ class StreamPadPygame:
         """Draw triangle arrows for D-pad buttons"""
         center_x = button_rect.centerx
         center_y = button_rect.centery
-        size = min(button_rect.width, button_rect.height) // 4  # Triangle size
+        size = min(button_rect.width, button_rect.height) // 4
         
         if button_id == '12':  # UP
             points = [
-                (center_x, center_y - size),      # Top point
-                (center_x - size, center_y + size//2),  # Bottom left
-                (center_x + size, center_y + size//2)   # Bottom right
+                (center_x, center_y - size),
+                (center_x - size, center_y + size//2),
+                (center_x + size, center_y + size//2)
             ]
         elif button_id == '13':  # DOWN
             points = [
-                (center_x, center_y + size),      # Bottom point
-                (center_x - size, center_y - size//2),  # Top left
-                (center_x + size, center_y - size//2)   # Top right
+                (center_x, center_y + size),
+                (center_x - size, center_y - size//2),
+                (center_x + size, center_y - size//2)
             ]
         elif button_id == '14':  # LEFT
             points = [
-                (center_x - size, center_y),      # Left point
-                (center_x + size//2, center_y - size),  # Top right
-                (center_x + size//2, center_y + size)   # Bottom right
+                (center_x - size, center_y),
+                (center_x + size//2, center_y - size),
+                (center_x + size//2, center_y + size)
             ]
         elif button_id == '15':  # RIGHT
             points = [
-                (center_x + size, center_y),      # Right point
-                (center_x - size//2, center_y - size),  # Top left
-                (center_x - size//2, center_y + size)   # Bottom left
+                (center_x + size, center_y),
+                (center_x - size//2, center_y - size),
+                (center_x - size//2, center_y + size)
             ]
         else:
             return
@@ -618,32 +808,25 @@ class StreamPadPygame:
         for note in self.notes:
             note_rect = pygame.Rect(note.x, note.y, note.width, note.height)
             
-            # Add glow effect for long notes (matching web version)
             if note.height > 50:
-                # Create multiple glow layers for better effect
                 for i in range(3):
                     glow_size = (i + 1) * 2
-                    glow_alpha = 60 - (i * 15)  # Fade out each layer
+                    glow_alpha = 60 - (i * 15)
                     glow_color = (*note.color, glow_alpha)
                     glow_rect = pygame.Rect(
                         note.x - glow_size, note.y - glow_size, 
                         note.width + glow_size * 2, note.height + glow_size * 2
                     )
-                    # Create surface for alpha blending
                     glow_surface = pygame.Surface((glow_rect.width, glow_rect.height), pygame.SRCALPHA)
                     pygame.draw.rect(glow_surface, glow_color, (0, 0, glow_rect.width, glow_rect.height), 2)
                     self.screen.blit(glow_surface, (glow_rect.x, glow_rect.y))
             
-            # Draw main note
             pygame.draw.rect(self.screen, note.color, note_rect)
-            
-            # Add border for definition (matching web version style)
             pygame.draw.rect(self.screen, note.color, note_rect, 1)
     
     def draw_ui(self):
         """Draw UI elements"""
         if self.show_help:
-            # Controller status
             if self.active_controller:
                 status_text = f"Controller: {self.active_controller.get_name()} ({self.controller_type.value})"
                 status_color = (0, 255, 0)
@@ -654,25 +837,23 @@ class StreamPadPygame:
             status_surface = self.small_font.render(status_text, True, status_color)
             self.screen.blit(status_surface, (10, 10))
             
-            # Stats
             stats_text = f"Total Presses: {self.total_presses}"
             stats_surface = self.small_font.render(stats_text, True, COLORS['text'])
             self.screen.blit(stats_surface, (10, 35))
             
-            # Instructions
             instructions = [
                 "H: Toggle help",
                 "ESC: Emergency cleanup",
                 "R: Refresh controllers", 
                 "TAB: Switch controller",
-                "Left stick: D-pad (diagonal = both!)"
+                "Left stick: D-pad (diagonal = both!)",
+                "D-pad uses HAT on Nintendo pads"
             ]
             
             for i, instruction in enumerate(instructions):
                 inst_surface = self.small_font.render(instruction, True, COLORS['text'])
-                self.screen.blit(inst_surface, (SCREEN_WIDTH - 280, 10 + i * 25))
+                self.screen.blit(inst_surface, (SCREEN_WIDTH - 320, 10 + i * 25))
         else:
-            # Minimal UI - just show help hint
             help_text = "Press H for help"
             help_surface = self.small_font.render(help_text, True, (100, 100, 100))
             self.screen.blit(help_surface, (SCREEN_WIDTH - 120, 10))
@@ -682,24 +863,30 @@ class StreamPadPygame:
         print("🧹 Emergency cleanup - clearing all stuck states")
         self.button_states.clear()
         self.last_button_states.clear()
-        self.last_axis_states.clear()  # Clear joystick states too
+        self.last_axis_states.clear()
+        self.last_global_button_states.clear()
+        self.last_hat_state = (0, 0)
+        self.last_global_hat_state = (0, 0)
         self.active_notes.clear()
         self.notes.clear()
+        
+    def cleanup(self):
+        """Clean shutdown - stop global monitoring"""
+        print("🔄 Shutting down StreamPad...")
+        self.global_input_enabled = False
+        if self.global_input_thread and self.global_input_thread.is_alive():
+            self.global_input_thread.join(timeout=1.0)
     
     def run(self):
         """Main game loop"""
         running = True
         
         while running:
-            dt = self.clock.tick(FPS) / 1000.0  # Delta time in seconds
+            dt = self.clock.tick(FPS) / 1000.0
             
-            # Handle events
             running = self.handle_events()
-            
-            # Update
             self.update_ddr_notes(dt)
             
-            # Draw
             self.screen.fill(COLORS['background'])
             self.draw_lanes()
             self.draw_ddr_notes()
@@ -707,18 +894,28 @@ class StreamPadPygame:
             
             pygame.display.flip()
         
+        self.cleanup()
         pygame.quit()
         sys.exit()
 
 def main():
     """Main entry point"""
+    app = None
     try:
         app = StreamPadPygame()
         app.run()
     except KeyboardInterrupt:
         print("\n👋 Goodbye!")
+        if app:
+            app.cleanup()
         pygame.quit()
         sys.exit()
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        if app:
+            app.cleanup()
+        pygame.quit()
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
