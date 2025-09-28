@@ -66,7 +66,7 @@ BUTTON_NAMES = {
     '2': 'X', '3': 'Y', '0': 'B', '1': 'A'
 }
 
-BUTTON_ORDER = ['14', '12', '15', '13', '4', '5', '6', '7', '8', '9', '2', '3', '0', '1']
+BUTTON_ORDER = ['14', '12', '15', '13',  '2', '3', '0', '1',  '4', '5', '6', '7',  '8', '9',]
 
 @dataclass
 class DDRNote:
@@ -92,9 +92,13 @@ class ControllerType(Enum):
 
 class StreamPadPygame:
     def __init__(self):
-        # Initialize display
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        # Initialize display (resizable)
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
         pygame.display.set_caption("StreamPad - DDR Controller Input Logger")
+        
+        # Track current screen dimensions
+        self.current_width = SCREEN_WIDTH
+        self.current_height = SCREEN_HEIGHT
         self.clock = pygame.time.Clock()
         self.font = pygame.font.Font(None, 36)
         self.small_font = pygame.font.Font(None, 24)
@@ -109,9 +113,9 @@ class StreamPadPygame:
         self.last_hat_state: Tuple[int, int] = (0, 0)  # dpad hat last state
         
         # DDR lanes
-        self.lane_width = SCREEN_WIDTH // len(BUTTON_ORDER)
-        self.lane_height = SCREEN_HEIGHT - 100
+        # DDR layout (will be updated dynamically)
         self.button_height = 80
+        self.update_layout_dimensions()
         
         # DDR notes
         self.notes: List[DDRNote] = []
@@ -181,6 +185,10 @@ class StreamPadPygame:
         try:
             gamepad = self.active_controller
             if not gamepad or not gamepad.get_init():
+                return
+            
+            # Skip global input if pygame window has focus (prevent double processing)
+            if pygame.display.get_active():
                 return
                 
             # buttons
@@ -324,6 +332,11 @@ class StreamPadPygame:
                     
         except Exception:
             pass
+    
+    def update_layout_dimensions(self):
+        """Update layout dimensions based on current screen size"""
+        self.lane_width = self.current_width // len(BUTTON_ORDER)
+        self.lane_height = self.current_height - 100
     
     def initial_controller_scan(self):
         """Initial safe controller scan (no quit/init cycle)"""
@@ -524,16 +537,28 @@ class StreamPadPygame:
                 14: '15', # pygame 14 → RIGHT ✅
             }
         
-        # SNES Controller specific mapping
+        # SNES Controller specific mapping (from controller_mapper.py results)
         elif self.controller_type == ControllerType.SNES_SWITCH:
             mapping.update({
-                0: '0',   # B (SNES layout)
-                1: '1',   # A
-                2: '2',   # X
-                3: '3',   # Y
-                4: '4',   # L
-                5: '5',   # R
-                # D-pad via hat on this device
+                # D-pad buttons
+                11: '12',  # DPAD_UP
+                12: '13',  # DPAD_DOWN
+                13: '14',  # DPAD_LEFT
+                14: '15',  # DPAD_RIGHT
+                
+                # Shoulder buttons
+                9: '4',    # L1
+                10: '5',   # R1
+                
+                # Face buttons (SNES layout)
+                0: '1',    # A button
+                1: '0',    # B button
+                2: '2',    # X button
+                3: '3',    # Y button
+                
+                # System buttons
+                4: '8',    # SELECT
+                6: '9',    # START
             })
         
         return mapping.get(pygame_button)
@@ -547,6 +572,14 @@ class StreamPadPygame:
             if event.type == pygame.QUIT:
                 return False
             
+            elif event.type == pygame.VIDEORESIZE:
+                # Handle window resize
+                self.current_width = event.w
+                self.current_height = event.h
+                self.screen = pygame.display.set_mode((self.current_width, self.current_height), pygame.RESIZABLE)
+                self.update_layout_dimensions()
+                print(f"🔄 Window resized to {self.current_width}x{self.current_height}")
+            
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.emergency_cleanup()
@@ -559,6 +592,9 @@ class StreamPadPygame:
                 elif event.key == pygame.K_c:
                     self.raw_dump = not self.raw_dump
                     print(f"🧪 raw dump {'ON' if self.raw_dump else 'OFF'}")
+                elif event.key == pygame.K_v:
+                    print("🔧 Manual button state validation...")
+                    self.validate_button_states()
             
             elif event.type == pygame.JOYBUTTONDOWN:
                 try:
@@ -764,27 +800,29 @@ class StreamPadPygame:
             pass
     
     def on_button_press(self, button_id: str):
-        """Handle button press"""
-        if button_id in self.button_states and self.button_states[button_id]:
-            return  # Already pressed
-        
-        print(f"🎮 Button {button_id} ({BUTTON_NAMES.get(button_id, button_id)}) pressed")
-        
-        self.button_states[button_id] = True
-        self.button_press_count[button_id] = self.button_press_count.get(button_id, 0) + 1
-        self.total_presses += 1
-        
-        self.create_ddr_note(button_id)
+        """Handle button press (thread-safe)"""
+        with self.global_input_lock:
+            if button_id in self.button_states and self.button_states[button_id]:
+                return  # Already pressed
+            
+            print(f"🎮 Button {button_id} ({BUTTON_NAMES.get(button_id, button_id)}) pressed [Thread: {threading.current_thread().name}]")
+            
+            self.button_states[button_id] = True
+            self.button_press_count[button_id] = self.button_press_count.get(button_id, 0) + 1
+            self.total_presses += 1
+            
+            self.create_ddr_note(button_id)
     
     def on_button_release(self, button_id: str):
-        """Handle button release"""
-        if button_id not in self.button_states or not self.button_states[button_id]:
-            return  # Already released
-        
-        print(f"🎮 Button {button_id} ({BUTTON_NAMES.get(button_id, button_id)}) released")
-        
-        self.button_states[button_id] = False
-        self.end_ddr_note(button_id)
+        """Handle button release (thread-safe)"""
+        with self.global_input_lock:
+            if button_id not in self.button_states or not self.button_states[button_id]:
+                return  # Already released
+            
+            print(f"🎮 Button {button_id} ({BUTTON_NAMES.get(button_id, button_id)}) released [Thread: {threading.current_thread().name}]")
+            
+            self.button_states[button_id] = False
+            self.end_ddr_note(button_id)
     
     def create_ddr_note(self, button_id: str):
         """Create a new DDR note (matching web version exactly)"""
@@ -956,22 +994,72 @@ class StreamPadPygame:
                 inst_surface = self.small_font.render(instruction, True, COLORS['text'])
                 self.screen.blit(inst_surface, (SCREEN_WIDTH - 320, 10 + i * 25))
         else:
-            help_text = "Press H for help"
+            help_text = "" # "Press H for help"
             help_surface = self.small_font.render(help_text, True, (100, 100, 100))
             self.screen.blit(help_surface, (SCREEN_WIDTH - 120, 10))
     
     def emergency_cleanup(self):
         """Clear all stuck states and notes"""
         print("🧹 Emergency cleanup - clearing all stuck states")
-        self.button_states.clear()
-        self.last_button_states.clear()
-        self.last_axis_states.clear()
-        self.last_global_button_states.clear()
-        self.last_hat_state = (0, 0)
-        self.last_global_hat_state = (0, 0)
-        self.last_hat_event_time = 0.0
-        self.active_notes.clear()
-        self.notes.clear()
+        
+        # Use thread lock for safety
+        with self.global_input_lock:
+            # Clear all button states
+            self.button_states.clear()
+            self.last_button_states.clear()
+            self.last_axis_states.clear()
+            self.last_global_button_states.clear()
+            
+            # Clear hat states
+            self.last_hat_state = (0, 0)
+            self.last_global_hat_state = (0, 0)
+            self.last_hat_event_time = 0.0
+            
+            # Clear all notes
+            self.active_notes.clear()
+            self.notes.clear()
+            
+            # Force end any stuck notes
+            for button_id in list(self.active_notes.keys()):
+                self.on_button_release(button_id)
+        
+        print("✅ Emergency cleanup completed")
+    
+    def validate_button_states(self):
+        """Validate button states against actual controller state to prevent stuck buttons"""
+        if not self.active_controller or not self.active_controller.get_init():
+            return
+            
+        try:
+            with self.global_input_lock:
+                # Check each button that we think is pressed
+                stuck_buttons = []
+                for button_id, is_pressed in self.button_states.items():
+                    if is_pressed:
+                        # Get the actual pygame button index for this button
+                        pygame_button = None
+                        button_mapping = self.get_button_mapping()
+                        for pygame_idx, mapped_id in button_mapping.items():
+                            if mapped_id == button_id:
+                                pygame_button = pygame_idx
+                                break
+                        
+                        # Check if the physical button is actually pressed
+                        if pygame_button is not None and pygame_button < self.active_controller.get_numbuttons():
+                            actual_pressed = self.active_controller.get_button(pygame_button)
+                            if not actual_pressed:
+                                stuck_buttons.append(button_id)
+                
+                # Release any stuck buttons
+                for button_id in stuck_buttons:
+                    print(f"🔧 Auto-fixing stuck button: {button_id}")
+                    self.on_button_release(button_id)
+                    
+        except Exception as e:
+            # If validation fails, just do emergency cleanup
+            if stuck_buttons:
+                print(f"⚠️ Button validation failed, doing emergency cleanup: {e}")
+                self.emergency_cleanup()
         
     def cleanup(self):
         """Clean shutdown - stop global monitoring"""
@@ -983,12 +1071,20 @@ class StreamPadPygame:
     def run(self):
         """Main game loop"""
         running = True
+        validation_timer = 0
+        validation_interval = 2.0  # Validate button states every 2 seconds
         
         while running:
             dt = self.clock.tick(FPS) / 1000.0
             
             running = self.handle_events()
             self.update_ddr_notes(dt)
+            
+            # Periodic validation to prevent stuck buttons
+            validation_timer += dt
+            if validation_timer >= validation_interval:
+                self.validate_button_states()
+                validation_timer = 0
             
             self.screen.fill(COLORS['background'])
             self.draw_lanes()
