@@ -130,6 +130,12 @@ class StreamPadPygame:
         # UI state
         self.show_help = False  # Toggle help with H key
         
+        # device quirk handling
+        self.nintendo_hat_only = False
+        self.last_hat_event_time = 0.0
+        self.hat_button_debounce_ms = 30  # ignore button events within 30ms of a hat move
+        self.raw_dump = False  # press 'C' to toggle raw event dump
+        
         # Global input detection
         self.global_input_enabled = True
         self.global_input_thread = None
@@ -178,10 +184,20 @@ class StreamPadPygame:
                 return
                 
             # buttons
+            suppress_buttons = self.nintendo_hat_only and self._hat_debounce_active()
+            
             for i in range(gamepad.get_numbuttons()):
                 try:
                     is_pressed = bool(gamepad.get_button(i))
                     was_pressed = self.last_global_button_states.get(i, False)
+                    
+                    if suppress_buttons:
+                        # ignore any button transitions during hat debounce window
+                        self.last_global_button_states[i] = is_pressed
+                        continue
+                    if self.nintendo_hat_only and i in (12, 13, 14, 15):
+                        self.last_global_button_states[i] = is_pressed
+                        continue
                     
                     if is_pressed and not was_pressed:
                         button_id = self.get_button_mapping(i)
@@ -240,6 +256,7 @@ class StreamPadPygame:
                         self.on_button_release(bid)
             self.last_hat_state = (hx, hy)
             self.last_global_hat_state = (hx, hy)
+            self.last_hat_event_time = time.time()  # stamp for debounce
         except Exception:
             pass
 
@@ -328,6 +345,22 @@ class StreamPadPygame:
                         self.controller_type = self.detect_controller_type(controller)
                         print(f"✅ Active controller: {controller.get_name()}")
                         print(f"   Type: {self.controller_type.value}")
+                        
+                        # set nintendo_hat_only if device has a hat
+                        try:
+                            has_hat = self.active_controller.get_numhats() > 0
+                        except Exception:
+                            has_hat = False
+                        self.nintendo_hat_only = has_hat and (
+                            "nintendo" in self.active_controller.get_name().lower()
+                            or "switch" in self.active_controller.get_name().lower()
+                        )
+                        print(f"   nintendo_hat_only={self.nintendo_hat_only}")
+                        
+                        # Auto-enable raw dump for debugging Nintendo controllers
+                        if self.nintendo_hat_only:
+                            self.raw_dump = True
+                            print("🧪 Auto-enabled raw dump for Nintendo controller debugging")
                 
                 except pygame.error as e:
                     print(f"❌ Error initializing controller {i}: {e}")
@@ -380,6 +413,22 @@ class StreamPadPygame:
                         self.controller_type = self.detect_controller_type(controller)
                         print(f"✅ Active controller: {controller.get_name()}")
                         print(f"   Type: {self.controller_type.value}")
+                        
+                        # set nintendo_hat_only if device has a hat
+                        try:
+                            has_hat = self.active_controller.get_numhats() > 0
+                        except Exception:
+                            has_hat = False
+                        self.nintendo_hat_only = has_hat and (
+                            "nintendo" in self.active_controller.get_name().lower()
+                            or "switch" in self.active_controller.get_name().lower()
+                        )
+                        print(f"   nintendo_hat_only={self.nintendo_hat_only}")
+                        
+                        # Auto-enable raw dump for debugging Nintendo controllers
+                        if self.nintendo_hat_only:
+                            self.raw_dump = True
+                            print("🧪 Auto-enabled raw dump for Nintendo controller debugging")
                 
                 except pygame.error as e:
                     print(f"❌ Error initializing controller {i}: {e}")
@@ -388,6 +437,9 @@ class StreamPadPygame:
             print(f"❌ Error in controller detection: {e}")
             self.controllers.clear()
             self.active_controller = None
+    
+    def _hat_debounce_active(self) -> bool:
+        return (time.time() - self.last_hat_event_time) * 1000.0 <= self.hat_button_debounce_ms
     
     def detect_controller_type(self, controller: pygame.joystick.Joystick) -> ControllerType:
         """Detect controller type based on name and properties"""
@@ -430,23 +482,46 @@ class StreamPadPygame:
             15: '15', # RIGHT
         }
         
-        # Switch Pro Controller specific mapping
+        # Switch Pro Controller specific mapping (FIXED based on testing data!)
         if self.controller_type == ControllerType.SWITCH_PRO:
+            # From your test: Physical → Log showed → Should show → Pygame index
+            # DPAD UP → R1 → UP → pygame 5
+            # DPAD RIGHT → LEFT → RIGHT → pygame 14  
+            # DPAD DOWN → UP → DOWN → pygame 12
+            # DPAD LEFT → DOWN → LEFT → pygame 13
+            # L1 → STRT → L1 → pygame 9
+            # R1 → L1 → R1 → pygame 4 (conflicts with MINUS!)
+            # ZL → ZL → ZL → pygame 6 (conflicts with PLUS!)
+            # ZR → ZR → ZR → pygame 7 ✓  
+            # Y → Y → Y → pygame 3 ✓
+            # X → X → X → pygame 2 ✓
+            # B → A → B → pygame 1
+            # A → B → A → pygame 0
+            # MINUS → L1 (twice!) → SELECT → pygame 4 (same as R1!)
+            # PLUS → ZL → START → pygame 6 (same as ZL!)
+            
             mapping = {
-                0: '0',   # B 
-                1: '1',   # A
-                2: '2',   # Y  
-                3: '3',   # X
-                4: '4',   # L1
-                5: '5',   # R1
-                6: '6',   # ZL (if button; else axis)
-                7: '7',   # ZR (if button; else axis)
-                8: '8',   # Minus/SELECT
-                9: '9',   # Plus/START
-                10: '4',  # L stick click
-                11: '5',  # R stick click
-                # D-pad: prefer hat; keep for odd drivers:
-                12: '12', 13: '13', 14: '14', 15: '15',
+                # Face buttons (A/B swapped - working correctly!)
+                0: '1',   # pygame 0 → B → should be A
+                1: '0',   # pygame 1 → A → should be B
+                2: '2',   # pygame 2 → X → correct ✅
+                3: '3',   # pygame 3 → Y → correct ✅
+                
+                # Shoulders/triggers/system (CORRECTED with mapping tool results!)
+                4: '8',   # pygame 4 → SELECT ✅
+                6: '9',   # pygame 6 → START ✅
+                7: '10',  # pygame 7 → L3 (stick click)
+                8: '11',  # pygame 8 → R3 (stick click)
+                9: '4',   # pygame 9 → L1 ✅
+                10: '5',  # pygame 10 → R1 ✅ (FOUND IT!)
+                
+                # ZL/ZR are on axes, not buttons - handle separately
+                
+                # D-pad (CORRECTED with mapping tool results!)
+                11: '12', # pygame 11 → UP ✅
+                12: '13', # pygame 12 → DOWN ✅
+                13: '14', # pygame 13 → LEFT ✅
+                14: '15', # pygame 14 → RIGHT ✅
             }
         
         # SNES Controller specific mapping
@@ -466,6 +541,9 @@ class StreamPadPygame:
     def handle_events(self):
         """Handle pygame events"""
         for event in pygame.event.get():
+            if self.raw_dump:
+                print(f"RAW: {event}")
+                
             if event.type == pygame.QUIT:
                 return False
             
@@ -478,10 +556,23 @@ class StreamPadPygame:
                     self.switch_active_controller()  # Switch between controllers
                 elif event.key == pygame.K_h:
                     self.show_help = not self.show_help  # Toggle help
+                elif event.key == pygame.K_c:
+                    self.raw_dump = not self.raw_dump
+                    print(f"🧪 raw dump {'ON' if self.raw_dump else 'OFF'}")
             
             elif event.type == pygame.JOYBUTTONDOWN:
                 try:
                     if self.active_controller and event.joy == self.active_controller.get_instance_id():
+                        # TEMPORARILY DISABLED suppression to see all raw events
+                        # if self.nintendo_hat_only and event.button in (12, 13, 14, 15):
+                        #     if self.raw_dump:
+                        #         print(f"RAW: suppressed dpad button {event.button} due to hat-only mode")
+                        #     continue
+                        # if self.nintendo_hat_only and self._hat_debounce_active():
+                        #     if self.raw_dump:
+                        #         print(f"RAW: suppressed button {event.button} (hat debounce)")
+                        #     continue
+
                         button_id = self.get_button_mapping(event.button)
                         if button_id:
                             self.on_button_press(button_id)
@@ -491,6 +582,16 @@ class StreamPadPygame:
             elif event.type == pygame.JOYBUTTONUP:
                 try:
                     if self.active_controller and event.joy == self.active_controller.get_instance_id():
+                        # TEMPORARILY DISABLED suppression for button up events too
+                        # if self.nintendo_hat_only and event.button in (12, 13, 14, 15):
+                        #     if self.raw_dump:
+                        #         print(f"RAW: suppressed dpad button {event.button} up due to hat-only mode")
+                        #     continue
+                        # if self.nintendo_hat_only and self._hat_debounce_active():
+                        #     if self.raw_dump:
+                        #         print(f"RAW: suppressed button {event.button} up (hat debounce)")
+                        #     continue
+
                         button_id = self.get_button_mapping(event.button)
                         if button_id:
                             self.on_button_release(button_id)
@@ -498,6 +599,7 @@ class StreamPadPygame:
                     pass  # Ignore errors from disconnected controllers
 
             elif event.type == pygame.JOYHATMOTION:
+                self.last_hat_event_time = time.time()
                 # Convert hat x/y into d-pad button presses
                 try:
                     if self.active_controller and event.joy == self.active_controller.get_instance_id():
@@ -846,8 +948,8 @@ class StreamPadPygame:
                 "ESC: Emergency cleanup",
                 "R: Refresh controllers", 
                 "TAB: Switch controller",
-                "Left stick: D-pad (diagonal = both!)",
-                "D-pad uses HAT on Nintendo pads"
+                "C: Raw dump on/off",
+                f"D-pad via HAT: {'ON' if self.nintendo_hat_only else 'OFF'}"
             ]
             
             for i, instruction in enumerate(instructions):
@@ -867,6 +969,7 @@ class StreamPadPygame:
         self.last_global_button_states.clear()
         self.last_hat_state = (0, 0)
         self.last_global_hat_state = (0, 0)
+        self.last_hat_event_time = 0.0
         self.active_notes.clear()
         self.notes.clear()
         
