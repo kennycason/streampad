@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controller Debug Tool</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background: #0a0a0a;
+            color: #00ff00;
+            padding: 20px;
+            margin: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #00ffff;
+            text-align: center;
+        }
+        .info {
+            background: #1a1a1a;
+            padding: 15px;
+            margin: 10px 0;
+            border: 1px solid #333;
+            border-radius: 5px;
+        }
+        .button-grid, .axis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .button, .axis {
+            background: #1a1a1a;
+            padding: 10px;
+            border: 2px solid #333;
+            border-radius: 5px;
+            text-align: center;
+        }
+        .button.pressed {
+            background: #00ff00;
+            color: #000;
+            border-color: #00ff00;
+            font-weight: bold;
+        }
+        .axis-value {
+            color: #ffff00;
+            font-size: 1.2em;
+        }
+        .status {
+            color: #ff6347;
+            font-size: 1.2em;
+            margin: 20px 0;
+        }
+        .connected {
+            color: #00ff00;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 Controller Debug Tool</h1>
+        <div class="info">
+            <div class="status" id="status">❌ No controller detected</div>
+            <div id="controllerName"></div>
+            <div id="controllerInfo"></div>
+        </div>
+
+        <div class="info">
+            <h2>Buttons</h2>
+            <div class="button-grid" id="buttonGrid"></div>
+        </div>
+
+        <div class="info">
+            <h2>Axes</h2>
+            <div class="axis-grid" id="axisGrid"></div>
+        </div>
+
+        <div class="info">
+            <h2>Event Log (Last 20 events)</h2>
+            <div id="eventLog" style="max-height: 300px; overflow-y: auto; font-size: 0.9em;"></div>
+        </div>
+    </div>
+
+    <script>
+        let gamepadIndex = null;
+        let lastButtonStates = {};
+        let lastAxisStates = {};
+        let eventLog = [];
+
+        function addLog(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            eventLog.unshift(`[${timestamp}] ${message}`);
+            if (eventLog.length > 20) eventLog.pop();
+            document.getElementById('eventLog').innerHTML = eventLog.join('<br>');
+        }
+
+        window.addEventListener('gamepadconnected', (e) => {
+            gamepadIndex = e.gamepad.index;
+            document.getElementById('status').innerHTML = '✅ Controller connected';
+            document.getElementById('status').classList.add('connected');
+            document.getElementById('controllerName').innerHTML = `<strong>Name:</strong> ${e.gamepad.id}`;
+            document.getElementById('controllerInfo').innerHTML = `<strong>Buttons:</strong> ${e.gamepad.buttons.length} | <strong>Axes:</strong> ${e.gamepad.axes.length}`;
+            addLog(`Connected: ${e.gamepad.id}`);
+            
+            // Initialize button display
+            updateButtonDisplay(e.gamepad);
+        });
+
+        window.addEventListener('gamepaddisconnected', (e) => {
+            if (e.gamepad.index === gamepadIndex) {
+                gamepadIndex = null;
+                document.getElementById('status').innerHTML = '❌ Controller disconnected';
+                document.getElementById('status').classList.remove('connected');
+                addLog('Controller disconnected');
+            }
+        });
+
+        function updateButtonDisplay(gamepad) {
+            const grid = document.getElementById('buttonGrid');
+            grid.innerHTML = '';
+            
+            for (let i = 0; i < gamepad.buttons.length; i++) {
+                const btn = document.createElement('div');
+                btn.className = 'button';
+                btn.id = `button-${i}`;
+                btn.innerHTML = `BTN ${i}<br><span style="font-size: 0.8em;">---</span>`;
+                grid.appendChild(btn);
+            }
+        }
+
+        function updateAxisDisplay(gamepad) {
+            const grid = document.getElementById('axisGrid');
+            
+            // Only update if axes count changed
+            if (grid.children.length !== gamepad.axes.length) {
+                grid.innerHTML = '';
+                for (let i = 0; i < gamepad.axes.length; i++) {
+                    const axis = document.createElement('div');
+                    axis.className = 'axis';
+                    axis.id = `axis-${i}`;
+                    grid.appendChild(axis);
+                }
+            }
+        }
+
+        function updateGamepad() {
+            if (gamepadIndex === null) return;
+            
+            const gamepad = navigator.getGamepads()[gamepadIndex];
+            if (!gamepad) return;
+            
+            // Check for initial display
+            const buttonGrid = document.getElementById('buttonGrid');
+            if (buttonGrid.children.length === 0) {
+                updateButtonDisplay(gamepad);
+            }
+            
+            // Update buttons
+            for (let i = 0; i < gamepad.buttons.length; i++) {
+                const isPressed = gamepad.buttons[i].pressed;
+                const value = gamepad.buttons[i].value;
+                const wasPressed = lastButtonStates[i] || false;
+                
+                const btnEl = document.getElementById(`button-${i}`);
+                if (btnEl) {
+                    if (isPressed) {
+                        btnEl.classList.add('pressed');
+                        btnEl.innerHTML = `BTN ${i}<br><span style="font-size: 0.8em;">${value.toFixed(2)}</span>`;
+                    } else {
+                        btnEl.classList.remove('pressed');
+                        btnEl.innerHTML = `BTN ${i}<br><span style="font-size: 0.8em;">---</span>`;
+                    }
+                }
+                
+                // Log button changes
+                if (isPressed && !wasPressed) {
+                    addLog(`🎮 Button ${i} PRESSED (value: ${value.toFixed(2)})`);
+                } else if (!isPressed && wasPressed) {
+                    addLog(`🎮 Button ${i} RELEASED`);
+                }
+                
+                lastButtonStates[i] = isPressed;
+            }
+            
+            // Update axes display
+            updateAxisDisplay(gamepad);
+            
+            // Update axes
+            for (let i = 0; i < gamepad.axes.length; i++) {
+                const value = gamepad.axes[i];
+                const axisEl = document.getElementById(`axis-${i}`);
+                if (axisEl) {
+                    let bar = '';
+                    const barWidth = Math.abs(value) * 10;
+                    for (let j = 0; j < barWidth; j++) {
+                        bar += value > 0 ? '▶' : '◀';
+                    }
+                    axisEl.innerHTML = `AXIS ${i}<br><span class="axis-value">${value.toFixed(3)}</span><br>${bar}`;
+                }
+                
+                // Log significant axis changes (deadzone of 0.2)
+                const lastValue = lastAxisStates[i] || 0;
+                if (Math.abs(value - lastValue) > 0.3) {
+                    if (Math.abs(value) > 0.2) {
+                        addLog(`🕹️ Axis ${i}: ${value.toFixed(3)}`);
+                    }
+                    lastAxisStates[i] = value;
+                }
+            }
+        }
+
+        // Main loop
+        function loop() {
+            updateGamepad();
+            requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
+
+        // Check for existing gamepads on load
+        window.addEventListener('load', () => {
+            const gamepads = navigator.getGamepads();
+            for (let i = 0; i < gamepads.length; i++) {
+                if (gamepads[i]) {
+                    gamepadIndex = i;
+                    document.getElementById('status').innerHTML = '✅ Controller detected';
+                    document.getElementById('status').classList.add('connected');
+                    document.getElementById('controllerName').innerHTML = `<strong>Name:</strong> ${gamepads[i].id}`;
+                    document.getElementById('controllerInfo').innerHTML = `<strong>Buttons:</strong> ${gamepads[i].buttons.length} | <strong>Axes:</strong> ${gamepads[i].axes.length}`;
+                    addLog(`Detected: ${gamepads[i].id}`);
+                    updateButtonDisplay(gamepads[i]);
+                    break;
+                }
+            }
+        });
+    </script>
+</body>
+</html>
+

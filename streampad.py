@@ -5,8 +5,12 @@ A visual controller input display for streaming overlays
 """
 
 import os
-# allow joystick events + polling while window is not focused
+# SDL settings to minimize controller interference with other apps
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
+# Hint to SDL: we want to read input without exclusive access
+os.environ.setdefault("SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
+# Use event-driven input instead of polling (less aggressive)
+os.environ.setdefault("SDL_JOYSTICK_THREAD", "1")
 
 import pygame
 import sys
@@ -176,7 +180,7 @@ class StreamPadPygame:
             try:
                 if self.active_controller and self.active_controller.get_init():
                     self.check_global_controller_input()
-                time.sleep(1/120)  # 120 FPS polling for responsive input
+                time.sleep(1/60)  # 60 FPS polling (reduced from 120 to be less aggressive)
             except Exception:
                 time.sleep(0.1)
                 

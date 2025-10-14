@@ -132,7 +132,9 @@ class ControllerInputLogger {
         
         // Check for existing gamepads
         const gamepads = navigator.getGamepads();
+        console.log('🔍 Checking for existing gamepads...', gamepads.length, 'slots');
         for (let i = 0; i < gamepads.length; i++) {
+            console.log(`  Slot ${i}:`, gamepads[i] ? gamepads[i].id : 'empty');
             if (gamepads[i]) {
                 console.log('🎮 Found existing gamepad:', gamepads[i].id);
                 this.gamepadIndex = i;
@@ -262,12 +264,16 @@ class ControllerInputLogger {
     }
     
     getSwitchProConfig() {
+        // Pro Controller uses HATS for D-pad in browsers, not buttons
+        // Based on Python implementation: check for hats first, fallback to axes
         return {
             dpad: {
-                useAxes: true,
+                useAxes: true,   // Use axes as fallback (left stick)
+                useButtons: false, // Don't use button-based D-pad
+                useHats: true,   // NEW: Use hat-based D-pad detection
                 axes: {
-                    horizontal: 0,
-                    vertical: 1
+                    horizontal: 0,  // Left stick X
+                    vertical: 1     // Left stick Y
                 },
                 axisMapping: {
                     left: { min: -1.0, max: -0.5 },
@@ -278,12 +284,28 @@ class ControllerInputLogger {
                     down: { min: 0.5 },
                     up: { min: -0.5 }
                 },
-                buttons: {
-                    up: 12,
-                    down: 13,
-                    left: 14,
-                    right: 15
+                // Hat mapping (if browser supports it)
+                hatMapping: {
+                    up: { x: 0, y: 1 },    // (0, 1) = UP
+                    down: { x: 0, y: -1 }, // (0, -1) = DOWN
+                    left: { x: -1, y: 0 }, // (-1, 0) = LEFT
+                    right: { x: 1, y: 0 }  // (1, 0) = RIGHT
                 }
+            },
+            // Face buttons mapping (B=0, A=1, Y=2, X=3)
+            buttonMapping: {
+                0: '0',  // B button
+                1: '1',  // A button
+                2: '2',  // X button
+                3: '3',  // Y button
+                4: '4',  // L shoulder
+                5: '5',  // R shoulder
+                6: '6',  // ZL trigger
+                7: '7',  // ZR trigger
+                8: '8',  // SELECT (- button)
+                9: '9',  // START (+ button)
+                10: '10', // L3 (left stick click)
+                11: '11'  // R3 (right stick click)
             }
         };
     }
@@ -426,31 +448,161 @@ class ControllerInputLogger {
             const isPressed = gamepad.buttons[i].pressed;
             const wasPressed = this.lastGamepadState[i] || false;
             
+            // Skip D-pad buttons if using button-based or hat-based D-pad (handled separately)
+            if (this.currentControllerConfig.dpad && (this.currentControllerConfig.dpad.useButtons || this.currentControllerConfig.dpad.useHats)) {
+                // Skip buttons 12-15 if using hat detection (Pro Controller)
+                if (this.currentControllerConfig.dpad.useHats && [12, 13, 14, 15].includes(i)) {
+                    // Still update the state tracking, but skip processing
+                    this.lastGamepadState[i] = isPressed;
+                    continue; // Skip, handled in updateDpadFromHats
+                }
+                
+                // Skip specific D-pad buttons if using button-based D-pad
+                if (this.currentControllerConfig.dpad.useButtons) {
+                    const dpadButtons = [
+                        this.currentControllerConfig.dpad.buttons.up,
+                        this.currentControllerConfig.dpad.buttons.down,
+                        this.currentControllerConfig.dpad.buttons.left,
+                        this.currentControllerConfig.dpad.buttons.right
+                    ];
+                    if (dpadButtons.includes(i)) {
+                        // Still update the state tracking, but skip processing
+                        this.lastGamepadState[i] = isPressed;
+                        continue; // Skip, handled in updateDpadFromButtons
+                    }
+                }
+            }
+            
+            // Apply custom button mapping if available
+            let buttonId = i.toString();
+            if (this.currentControllerConfig.buttonMapping && this.currentControllerConfig.buttonMapping[i]) {
+                buttonId = this.currentControllerConfig.buttonMapping[i];
+            }
+            
             // Button press detected
             if (isPressed && !wasPressed) {
-                this.onButtonPress(i.toString(), currentTime);
+                this.onButtonPress(buttonId, currentTime);
             }
             
             // Button release detected
             if (!isPressed && wasPressed) {
-                this.onButtonRelease(i.toString());
+                this.onButtonRelease(buttonId);
             }
             
             this.lastGamepadState[i] = isPressed;
         }
         
-        // Handle D-pad via axes if configured
-        if (this.currentControllerConfig.dpad && this.currentControllerConfig.dpad.useAxes) {
+        // Handle D-pad via axes/hats if configured
+        if (this.currentControllerConfig.dpad && (this.currentControllerConfig.dpad.useAxes || this.currentControllerConfig.dpad.useHats)) {
             this.updateDpadFromAxes(gamepad);
         }
         
         this.lastUpdateTime = currentTime;
     }
     
+    updateDpadFromButtons(gamepad) {
+        // Handle D-pad via buttons (Pro Controller, etc.)
+        const config = this.currentControllerConfig.dpad;
+        const buttons = gamepad.buttons;
+        const currentTime = Date.now();
+        
+        // Map physical button indices to our internal button IDs
+        const dpadMapping = [
+            { btnIndex: config.buttons.up, id: '12', name: 'UP' },
+            { btnIndex: config.buttons.down, id: '13', name: 'DOWN' },
+            { btnIndex: config.buttons.left, id: '14', name: 'LEFT' },
+            { btnIndex: config.buttons.right, id: '15', name: 'RIGHT' }
+        ];
+        
+        for (const mapping of dpadMapping) {
+            if (buttons[mapping.btnIndex]) {
+                const isPressed = buttons[mapping.btnIndex].pressed;
+                const wasPressed = this.lastGamepadState[`dpad_${mapping.id}`] || false;
+                
+                if (isPressed && !wasPressed) {
+                    console.log(`D-pad ${mapping.name} pressed (button ${mapping.btnIndex})`);
+                    this.onButtonPress(mapping.id, currentTime);
+                    this.lastGamepadState[`dpad_${mapping.id}`] = true;
+                } else if (!isPressed && wasPressed) {
+                    console.log(`D-pad ${mapping.name} released (button ${mapping.btnIndex})`);
+                    this.onButtonRelease(mapping.id);
+                    this.lastGamepadState[`dpad_${mapping.id}`] = false;
+                }
+            }
+        }
+    }
+    
+    updateDpadFromHats(gamepad) {
+        // Try to detect D-pad via hats (Pro Controller style)
+        // In browser Gamepad API, hats are often reported as buttons 12-15
+        const buttons = gamepad.buttons;
+        const currentTime = Date.now();
+        
+        // Check if buttons 12-15 are being used as hat directions
+        const hatButtons = [12, 13, 14, 15]; // UP, DOWN, LEFT, RIGHT
+        let hatDetected = false;
+        
+        for (let i = 0; i < hatButtons.length; i++) {
+            const btnIndex = hatButtons[i];
+            if (buttons[btnIndex] && buttons[btnIndex].pressed) {
+                hatDetected = true;
+                break;
+            }
+        }
+        
+        if (!hatDetected) {
+            return false; // No hat input detected
+        }
+        
+        console.log('🎩 Hat-based D-pad detected, using buttons 12-15');
+        
+        // Map hat buttons to D-pad directions
+        const hatMapping = [
+            { btnIndex: 12, id: '12', name: 'UP' },
+            { btnIndex: 13, id: '13', name: 'DOWN' },
+            { btnIndex: 14, id: '14', name: 'LEFT' },
+            { btnIndex: 15, id: '15', name: 'RIGHT' }
+        ];
+        
+        for (const mapping of hatMapping) {
+            if (buttons[mapping.btnIndex]) {
+                const isPressed = buttons[mapping.btnIndex].pressed;
+                const wasPressed = this.lastGamepadState[`hat_${mapping.id}`] || false;
+                
+                if (isPressed && !wasPressed) {
+                    console.log(`🎩 Hat ${mapping.name} pressed (button ${mapping.btnIndex})`);
+                    this.onButtonPress(mapping.id, currentTime);
+                    this.lastGamepadState[`hat_${mapping.id}`] = true;
+                } else if (!isPressed && wasPressed) {
+                    console.log(`🎩 Hat ${mapping.name} released (button ${mapping.btnIndex})`);
+                    this.onButtonRelease(mapping.id);
+                    this.lastGamepadState[`hat_${mapping.id}`] = false;
+                }
+            }
+        }
+        
+        return true; // Hat detection was successful
+    }
+    
     updateDpadFromAxes(gamepad) {
         const config = this.currentControllerConfig.dpad;
-        const axes = gamepad.axes;
         const currentTime = Date.now();
+        
+        // If controller uses button-based D-pad, handle differently
+        if (config.useButtons) {
+            this.updateDpadFromButtons(gamepad);
+            return;
+        }
+        
+        // If controller uses hat-based D-pad (like Pro Controller), try hats first
+        if (config.useHats) {
+            const hatDetected = this.updateDpadFromHats(gamepad);
+            if (hatDetected) {
+                return; // Hat detection worked, skip axes
+            }
+        }
+        
+        const axes = gamepad.axes;
         
         // Debug axis values occasionally
         if (Math.random() < 0.01) {
@@ -544,7 +696,8 @@ class ControllerInputLogger {
         
         // Also check D-pad buttons directly (fallback) - only check actual D-pad button indices
         const buttons = gamepad.buttons;
-        const upButtonIndices = [config.buttons.up, 12]; // Only check D-pad specific buttons, not face buttons
+        // Use standard D-pad button indices as fallback
+        const upButtonIndices = [12]; // Standard D-pad UP button index
         
         let upDetected = false;
         for (const buttonIndex of upButtonIndices) {
@@ -615,8 +768,8 @@ class ControllerInputLogger {
         // End DDR note
         this.endDDRNote(buttonId);
         
-        // Clear from gamepad state tracking
-        delete this.lastGamepadState[buttonId];
+        // Clear from gamepad state tracking (but keep the physical button index)
+        // Don't delete from lastGamepadState - we need it for comparison
     }
     
     activateButton(buttonId) {
@@ -796,7 +949,7 @@ class ControllerInputLogger {
         this.lastGamepadState = {};
         
         // End all active DDR notes
-        Object.keys(this.activeDDRNotes).forEach(buttonId => {
+        this.activeNotes.forEach((noteData, buttonId) => {
             this.endDDRNote(buttonId);
         });
         
