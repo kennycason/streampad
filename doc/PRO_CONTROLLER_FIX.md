@@ -33,18 +33,34 @@ The web version (`index.html`) was not working correctly with the Nintendo Switc
 - Button 4 = L → Lane L1
 - Button 5 = R → Lane R1
 
-### 4. Trigger Button Mapping (Not displayed in default layout)
-- Button 6 = ZL (no lane)
-- Button 7 = ZR (no lane)
+### 4. Trigger Button Mapping (NOW DISPLAYED!)
+- Button 6 = ZL → Lane ZL ✅
+- Button 7 = ZR → Lane ZR ✅
 
 ### 5. System Button Mapping
-**After**: Correct SELECT/START mapping
-- Button 8 = SELECT (- button)
-- Button 9 = START (+ button)
+**After**: Correct +/- mapping (Nintendo style)
+- Button 8 = MINUS (−) → Lane − ✅
+- Button 9 = PLUS (+) → Lane + ✅
 
 ### 6. Stick Click Mapping (Not displayed in default layout)
 - Button 10 = L3 (no lane)
 - Button 11 = R3 (no lane)
+
+### 7. Dynamic Layout System (NEW!)
+**Pro Controller Layout**: 14 lanes
+- D-pad (4): ◀ ▲ ▶ ▼
+- Triggers (2): ZL ZR  
+- Shoulders (2): L R
+- System (2): − +
+- Face buttons (4): X Y B A
+
+**SNES Controller Layout**: 12 lanes  
+- D-pad (4): ◀ ▲ ▶ ▼
+- Shoulders (2): L1 R1
+- System (2): SLCT STRT
+- Face buttons (4): X Y B A
+
+The layout automatically switches when you connect different controllers!
 
 ## Code Changes
 
@@ -92,6 +108,24 @@ getSwitchProConfig() {
 - Now skips D-pad buttons when using button-based D-pad
 - Applies custom button mapping when available
 - Prevents double-processing of buttons
+
+### New Function: `rebuildLanesForController()`
+```javascript
+rebuildLanesForController() {
+    // Dynamically rebuilds the lane layout based on controller type
+    // Pro Controller: 14 lanes (includes ZL/ZR, +/-)
+    // SNES Controller: 12 lanes (L1/R1, SLCT/STRT)
+}
+```
+
+### New Function: `updateDpadFromHats()`
+```javascript
+updateDpadFromHats(gamepad) {
+    // Handles D-pad via hat detection (buttons 12-15)
+    // Includes auto-release timeout for stuck directions
+    // Returns true if hat detection was successful
+}
+```
 
 ## Testing Steps
 

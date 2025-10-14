@@ -30,6 +30,9 @@ class ControllerInputLogger {
         // DDR specific
         this.ddrNotes = new Map(); // Map of active notes
         this.activeNotes = new Map(); // Map of currently growing notes
+        
+        // Hat release tracking
+        this.hatReleaseTimers = new Map(); // Track auto-release timers for hats
         this.noteColors = {
             '14': '#FF1493', // LEFT - Deep Pink
             '12': '#00FFFF', // UP - Cyan
@@ -84,6 +87,16 @@ class ControllerInputLogger {
         // DDR view element
         this.ddrView = document.getElementById('ddrView');
         
+        // Cache DDR lanes (will be rebuilt dynamically)
+        this.cacheLanes();
+    }
+    
+    cacheLanes() {
+        // Clear existing lane cache
+        this.lanes = {};
+        this.buttonPressCount = {};
+        this.buttonPressHistory = {};
+        
         // Cache DDR lanes
         const lanes = document.querySelectorAll('.ddr-lane');
         
@@ -104,6 +117,82 @@ class ControllerInputLogger {
         });
     }
     
+    rebuildLanesForController() {
+        console.log('🔧 Rebuilding lanes for controller type:', this.gamepadType);
+        
+        const ddrLanes = document.querySelector('.ddr-lanes');
+        ddrLanes.innerHTML = ''; // Clear existing lanes
+        
+        let laneConfig;
+        
+        if (this.gamepadType === 'switch-pro') {
+            // Pro Controller layout: D-pad, ZL/ZR, L/R, +/-, Face buttons
+            laneConfig = [
+                { id: '14', symbol: '◀', color: '#FF1493' }, // LEFT
+                { id: '12', symbol: '▲', color: '#00FFFF' }, // UP  
+                { id: '15', symbol: '▶', color: '#32CD32' }, // RIGHT
+                { id: '13', symbol: '▼', color: '#FFD700' }, // DOWN
+                { id: '6', symbol: 'ZL', color: '#FF8C00' }, // ZL trigger
+                { id: '7', symbol: 'ZR', color: '#8A2BE2' }, // ZR trigger
+                { id: '4', symbol: 'L', color: '#FF4500' },  // L shoulder
+                { id: '5', symbol: 'R', color: '#9400D3' },  // R shoulder
+                { id: '8', symbol: '−', color: '#1E90FF' },  // MINUS (SELECT)
+                { id: '9', symbol: '+', color: '#FF69B4' },  // PLUS (START)
+                { id: '2', symbol: 'X', color: '#FFFF00' },  // X
+                { id: '3', symbol: 'Y', color: '#4169E1' },  // Y
+                { id: '0', symbol: 'B', color: '#00FF7F' },  // B
+                { id: '1', symbol: 'A', color: '#FF6347' }   // A
+            ];
+        } else {
+            // SNES Controller layout: D-pad, L/R, SELECT/START, Face buttons
+            laneConfig = [
+                { id: '14', symbol: '◀', color: '#FF1493' }, // LEFT
+                { id: '12', symbol: '▲', color: '#00FFFF' }, // UP
+                { id: '15', symbol: '▶', color: '#32CD32' }, // RIGHT
+                { id: '13', symbol: '▼', color: '#FFD700' }, // DOWN
+                { id: '4', symbol: 'L1', color: '#FF4500' }, // L1
+                { id: '5', symbol: 'R1', color: '#9400D3' }, // R1
+                { id: '8', symbol: 'SLCT', color: '#1E90FF' }, // SELECT
+                { id: '9', symbol: 'STRT', color: '#FF69B4' }, // START
+                { id: '2', symbol: 'X', color: '#FFFF00' },  // X
+                { id: '3', symbol: 'Y', color: '#4169E1' },  // Y
+                { id: '0', symbol: 'B', color: '#00FF7F' },  // B
+                { id: '1', symbol: 'A', color: '#FF6347' }   // A
+            ];
+        }
+        
+        // Create lanes
+        laneConfig.forEach(config => {
+            const lane = document.createElement('div');
+            lane.className = 'ddr-lane';
+            lane.setAttribute('data-button', config.id);
+            
+            const track = document.createElement('div');
+            track.className = 'lane-track';
+            track.id = `track-${config.id}`;
+            
+            const button = document.createElement('div');
+            button.className = 'lane-button';
+            button.setAttribute('data-color', config.color);
+            button.textContent = config.symbol;
+            
+            lane.appendChild(track);
+            lane.appendChild(button);
+            ddrLanes.appendChild(lane);
+        });
+        
+        // Update note colors for the new layout
+        this.noteColors = {};
+        laneConfig.forEach(config => {
+            this.noteColors[config.id] = config.color;
+        });
+        
+        // Re-cache the new lanes
+        this.cacheLanes();
+        
+        console.log(`✅ Rebuilt ${laneConfig.length} lanes for ${this.gamepadType} controller`);
+    }
+    
     
     setupGamepadSupport() {
         // Gamepad connection events
@@ -118,6 +207,9 @@ class ControllerInputLogger {
             
             this.updateControllerStatus(controllerInfo.name, controllerInfo.type, true);
             console.log(`✅ Controller detected: ${controllerInfo.name} (Type: ${controllerInfo.type})`);
+            
+            // Rebuild lanes for this controller type
+            this.rebuildLanesForController();
         });
         
         window.addEventListener('gamepaddisconnected', (e) => {
@@ -146,6 +238,9 @@ class ControllerInputLogger {
                 
                 this.updateControllerStatus(controllerInfo.name, controllerInfo.type, true);
                 console.log(`✅ Controller detected: ${controllerInfo.name} (Type: ${controllerInfo.type})`);
+                
+                // Rebuild lanes for this controller type
+                this.rebuildLanesForController();
                 break;
             }
         }
@@ -300,10 +395,10 @@ class ControllerInputLogger {
                 3: '3',  // Y button
                 4: '4',  // L shoulder
                 5: '5',  // R shoulder
-                6: '6',  // ZL trigger
-                7: '7',  // ZR trigger
-                8: '8',  // SELECT (- button)
-                9: '9',  // START (+ button)
+                6: '6',  // ZL trigger (now displayed!)
+                7: '7',  // ZR trigger (now displayed!)
+                8: '8',  // MINUS (- button)
+                9: '9',  // PLUS (+ button)
                 10: '10', // L3 (left stick click)
                 11: '11'  // R3 (right stick click)
             }
@@ -538,24 +633,6 @@ class ControllerInputLogger {
         const buttons = gamepad.buttons;
         const currentTime = Date.now();
         
-        // Check if buttons 12-15 are being used as hat directions
-        const hatButtons = [12, 13, 14, 15]; // UP, DOWN, LEFT, RIGHT
-        let hatDetected = false;
-        
-        for (let i = 0; i < hatButtons.length; i++) {
-            const btnIndex = hatButtons[i];
-            if (buttons[btnIndex] && buttons[btnIndex].pressed) {
-                hatDetected = true;
-                break;
-            }
-        }
-        
-        if (!hatDetected) {
-            return false; // No hat input detected
-        }
-        
-        console.log('🎩 Hat-based D-pad detected, using buttons 12-15');
-        
         // Map hat buttons to D-pad directions
         const hatMapping = [
             { btnIndex: 12, id: '12', name: 'UP' },
@@ -564,20 +641,63 @@ class ControllerInputLogger {
             { btnIndex: 15, id: '15', name: 'RIGHT' }
         ];
         
+        // Check current hat button states
+        let anyHatPressed = false;
+        const currentHatStates = {};
+        
         for (const mapping of hatMapping) {
             if (buttons[mapping.btnIndex]) {
                 const isPressed = buttons[mapping.btnIndex].pressed;
-                const wasPressed = this.lastGamepadState[`hat_${mapping.id}`] || false;
-                
-                if (isPressed && !wasPressed) {
-                    console.log(`🎩 Hat ${mapping.name} pressed (button ${mapping.btnIndex})`);
-                    this.onButtonPress(mapping.id, currentTime);
-                    this.lastGamepadState[`hat_${mapping.id}`] = true;
-                } else if (!isPressed && wasPressed) {
-                    console.log(`🎩 Hat ${mapping.name} released (button ${mapping.btnIndex})`);
-                    this.onButtonRelease(mapping.id);
-                    this.lastGamepadState[`hat_${mapping.id}`] = false;
+                currentHatStates[mapping.id] = isPressed;
+                if (isPressed) {
+                    anyHatPressed = true;
                 }
+            }
+        }
+        
+        if (!anyHatPressed) {
+            // No hats pressed - auto-release any stuck hats after a short delay
+            for (const mapping of hatMapping) {
+                const wasPressed = this.lastGamepadState[`hat_${mapping.id}`] || false;
+                if (wasPressed) {
+                    // Start auto-release timer if not already started
+                    if (!this.hatReleaseTimers.has(mapping.id)) {
+                        console.log(`🎩 Auto-releasing stuck hat ${mapping.name} after delay`);
+                        this.hatReleaseTimers.set(mapping.id, setTimeout(() => {
+                            console.log(`🎩 Hat ${mapping.name} auto-released (timeout)`);
+                            this.onButtonRelease(mapping.id);
+                            this.lastGamepadState[`hat_${mapping.id}`] = false;
+                            this.hatReleaseTimers.delete(mapping.id);
+                        }, 100)); // 100ms delay before auto-release
+                    }
+                }
+            }
+            return true; // Hat detection was active
+        }
+        
+        // Clear any pending auto-release timers since we have active hat input
+        for (const mapping of hatMapping) {
+            if (this.hatReleaseTimers.has(mapping.id)) {
+                clearTimeout(this.hatReleaseTimers.get(mapping.id));
+                this.hatReleaseTimers.delete(mapping.id);
+            }
+        }
+        
+        console.log('🎩 Hat-based D-pad detected, using buttons 12-15');
+        
+        // Process hat button presses/releases
+        for (const mapping of hatMapping) {
+            const isPressed = currentHatStates[mapping.id] || false;
+            const wasPressed = this.lastGamepadState[`hat_${mapping.id}`] || false;
+            
+            if (isPressed && !wasPressed) {
+                console.log(`🎩 Hat ${mapping.name} pressed (button ${mapping.btnIndex})`);
+                this.onButtonPress(mapping.id, currentTime);
+                this.lastGamepadState[`hat_${mapping.id}`] = true;
+            } else if (!isPressed && wasPressed) {
+                console.log(`🎩 Hat ${mapping.name} released (button ${mapping.btnIndex})`);
+                this.onButtonRelease(mapping.id);
+                this.lastGamepadState[`hat_${mapping.id}`] = false;
             }
         }
         
@@ -947,6 +1067,10 @@ class ControllerInputLogger {
         
         // Clear all button states
         this.lastGamepadState = {};
+        
+        // Clear hat release timers
+        this.hatReleaseTimers.forEach(timer => clearTimeout(timer));
+        this.hatReleaseTimers.clear();
         
         // End all active DDR notes
         this.activeNotes.forEach((noteData, buttonId) => {

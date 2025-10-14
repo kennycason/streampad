@@ -3,6 +3,8 @@
 A web-based controller input visualizer that displays real-time button presses in a DDR/Guitar Hero style with colorful scrolling rectangles.
 
 ![DDR Controller Logger](screenshot.png)
+![DDR Controller Logger](screenshot1.png)
+![DDR Controller Logger](screenshot2.png)
 
 ## ✨ Features
 
