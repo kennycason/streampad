@@ -1,0 +1,279 @@
+/* StreamPad - Neon DDR-Style Controller Visualizer */
+
+:root {
+    --neon-cyan: #00FFFF;
+    --neon-pink: #FF1493;
+    --neon-blue: #4169E1;
+    --neon-green: #32CD32;
+    --neon-purple: #9400D3;
+    --neon-yellow: #FFFF00;
+    --neon-orange: #FF4500;
+    --neon-magenta: #FF00FF;
+    --bg-black: #000000;
+    --bg-dark: #050510;
+    --border-glow: rgba(100, 0, 255, 0.4);
+    --lane-spacing: 3px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Courier New', monospace;
+    background: var(--bg-black);
+    color: #fff;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    position: relative;
+}
+
+/* Starfield canvas */
+#starfield {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* DDR View */
+.ddr-view {
+    padding: 0.5rem;
+    height: 100vh;
+    overflow: hidden;
+    position: relative;
+    z-index: 1;
+}
+
+.ddr-lanes {
+    display: flex;
+    height: 100%;
+    gap: var(--lane-spacing);
+    align-items: flex-end;
+}
+
+.ddr-lane {
+    flex: 1;
+    height: 100%;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    isolation: isolate;
+}
+
+.lane-track {
+    flex: 1;
+    width: 100%;
+    background: linear-gradient(
+        to bottom,
+        rgba(80, 0, 200, 0.03) 0%,
+        rgba(80, 0, 200, 0.02) 40%,
+        rgba(80, 0, 200, 0.06) 80%,
+        rgba(120, 0, 255, 0.12) 100%
+    );
+    border: 1px solid rgba(120, 0, 255, 0.15);
+    border-bottom: none;
+    position: relative;
+    overflow: hidden;
+}
+
+/* Subtle lane line effect */
+.lane-track::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 1px;
+    height: 100%;
+    background: linear-gradient(
+        to bottom,
+        transparent 0%,
+        rgba(120, 0, 255, 0.1) 50%,
+        rgba(120, 0, 255, 0.2) 100%
+    );
+    pointer-events: none;
+}
+
+.lane-button {
+    width: 100%;
+    height: 56px;
+    border: 2px solid rgba(100, 0, 255, 0.5);
+    background: rgba(20, 0, 60, 0.8);
+    transition: all 0.08s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 22px;
+    color: rgba(200, 180, 255, 0.7);
+    text-shadow: 0 0 6px rgba(150, 100, 255, 0.3);
+    letter-spacing: 1px;
+    position: relative;
+    flex-shrink: 0;
+}
+
+/* Glow line at top of button */
+.lane-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 10%;
+    width: 80%;
+    height: 1px;
+    background: linear-gradient(90deg,
+        transparent,
+        rgba(150, 100, 255, 0.5),
+        transparent
+    );
+}
+
+.lane-button.active {
+    color: #000 !important;
+    text-shadow: none;
+    z-index: 2;
+}
+
+/* DDR Notes */
+.ddr-note {
+    position: absolute;
+    width: calc(100% - 4px);
+    left: 2px;
+    box-shadow: 0 0 12px currentColor, 0 0 24px currentColor;
+    border: 1px solid currentColor;
+    z-index: 10;
+    opacity: 0.95;
+}
+
+/* Note trail glow */
+.ddr-note::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 10%;
+    width: 80%;
+    height: calc(100% + 8px);
+    background: inherit;
+    opacity: 0.3;
+    filter: blur(8px);
+    z-index: -1;
+}
+
+/* ===== EFFECTS (enabled via query params) ===== */
+
+/* ?glow=true - Intense glow on everything */
+body.fx-glow .lane-button {
+    box-shadow: 0 0 10px var(--border-glow), 0 0 20px var(--border-glow);
+}
+
+body.fx-glow .lane-button.active {
+    box-shadow: 0 0 20px currentColor, 0 0 40px currentColor, 0 0 60px currentColor !important;
+}
+
+body.fx-glow .ddr-note {
+    box-shadow: 0 0 15px currentColor, 0 0 30px currentColor, 0 0 50px currentColor;
+}
+
+body.fx-glow .lane-track {
+    border-color: rgba(120, 0, 255, 0.3);
+}
+
+/* ?pulse=true - Pulsing lane borders */
+body.fx-pulse .lane-track {
+    animation: lanePulse 2s ease-in-out infinite;
+}
+
+body.fx-pulse .lane-track:nth-child(odd) {
+    animation-delay: -1s;
+}
+
+@keyframes lanePulse {
+    0%, 100% { border-color: rgba(120, 0, 255, 0.1); }
+    50% { border-color: rgba(120, 0, 255, 0.35); }
+}
+
+/* ?flash=true - Button flash on press */
+body.fx-flash .lane-button.active {
+    animation: buttonFlash 0.15s ease-out;
+}
+
+@keyframes buttonFlash {
+    0% { filter: brightness(3); }
+    100% { filter: brightness(1); }
+}
+
+/* ?rainbow=true - Rainbow cycling border */
+body.fx-rainbow .ddr-view {
+    border: 2px solid transparent;
+    animation: rainbowBorder 4s linear infinite;
+}
+
+@keyframes rainbowBorder {
+    0% { border-color: #ff0000; }
+    17% { border-color: #ff8800; }
+    33% { border-color: #ffff00; }
+    50% { border-color: #00ff00; }
+    67% { border-color: #0088ff; }
+    83% { border-color: #8800ff; }
+    100% { border-color: #ff0000; }
+}
+
+/* ?scanlines=true - CRT scanline overlay */
+body.fx-scanlines::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.15) 2px,
+        rgba(0, 0, 0, 0.15) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+}
+
+/* ?matrix=true - Matrix-style falling characters (handled by JS, this just styles the canvas) */
+body.fx-matrix #starfield {
+    opacity: 0.6;
+}
+
+/* ?vaporwave=true - Pink/cyan color shift */
+body.fx-vaporwave {
+    background: linear-gradient(180deg, #0a001a 0%, #1a0030 50%, #0a001a 100%);
+}
+
+body.fx-vaporwave .lane-track {
+    background: linear-gradient(
+        to bottom,
+        rgba(255, 0, 200, 0.03) 0%,
+        rgba(0, 200, 255, 0.03) 50%,
+        rgba(255, 0, 200, 0.08) 100%
+    );
+    border-color: rgba(255, 0, 200, 0.2);
+}
+
+body.fx-vaporwave .lane-button {
+    border-color: rgba(255, 0, 200, 0.4);
+    color: rgba(255, 150, 255, 0.7);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .lane-button { height: 46px; font-size: 18px; }
+}
+
+@media (max-width: 480px) {
+    .ddr-view { padding: 0.25rem; }
+    .lane-button { height: 38px; font-size: 14px; }
+}

@@ -126,25 +126,25 @@ class ControllerInputLogger {
         let laneConfig;
         
         if (this.gamepadType === 'switch-pro') {
-            // Pro Controller layout: D-pad, ZL/ZR, L/R, +/-, Face buttons
+            // Pro Controller layout: D-pad, ZL/ZR, L/R, Face buttons, -/+
             laneConfig = [
                 { id: '14', symbol: '◀', color: '#FF1493' }, // LEFT
-                { id: '12', symbol: '▲', color: '#00FFFF' }, // UP  
+                { id: '12', symbol: '▲', color: '#00FFFF' }, // UP
                 { id: '15', symbol: '▶', color: '#32CD32' }, // RIGHT
                 { id: '13', symbol: '▼', color: '#FFD700' }, // DOWN
                 { id: '6', symbol: 'ZL', color: '#FF8C00' }, // ZL trigger
                 { id: '7', symbol: 'ZR', color: '#8A2BE2' }, // ZR trigger
                 { id: '4', symbol: 'L', color: '#FF4500' },  // L shoulder
                 { id: '5', symbol: 'R', color: '#9400D3' },  // R shoulder
-                { id: '8', symbol: '−', color: '#1E90FF' },  // MINUS (SELECT)
-                { id: '9', symbol: '+', color: '#FF69B4' },  // PLUS (START)
                 { id: '2', symbol: 'X', color: '#FFFF00' },  // X
                 { id: '3', symbol: 'Y', color: '#4169E1' },  // Y
                 { id: '0', symbol: 'B', color: '#00FF7F' },  // B
-                { id: '1', symbol: 'A', color: '#FF6347' }   // A
+                { id: '1', symbol: 'A', color: '#FF6347' },  // A
+                { id: '8', symbol: 'SL', color: '#1E90FF' }, // MINUS (SELECT)
+                { id: '9', symbol: 'ST', color: '#FF69B4' }  // PLUS (START)
             ];
         } else {
-            // SNES Controller layout: D-pad, L/R, SELECT/START, Face buttons
+            // SNES Controller layout: D-pad, L/R, Face buttons, SL/ST
             laneConfig = [
                 { id: '14', symbol: '◀', color: '#FF1493' }, // LEFT
                 { id: '12', symbol: '▲', color: '#00FFFF' }, // UP
@@ -152,12 +152,12 @@ class ControllerInputLogger {
                 { id: '13', symbol: '▼', color: '#FFD700' }, // DOWN
                 { id: '4', symbol: 'L1', color: '#FF4500' }, // L1
                 { id: '5', symbol: 'R1', color: '#9400D3' }, // R1
-                { id: '8', symbol: 'SLCT', color: '#1E90FF' }, // SELECT
-                { id: '9', symbol: 'STRT', color: '#FF69B4' }, // START
-                { id: '2', symbol: 'X', color: '#FFFF00' },  // X
-                { id: '3', symbol: 'Y', color: '#4169E1' },  // Y
+                { id: '2', symbol: 'Y', color: '#FFFF00' },  // Y
+                { id: '3', symbol: 'X', color: '#4169E1' },  // X
                 { id: '0', symbol: 'B', color: '#00FF7F' },  // B
-                { id: '1', symbol: 'A', color: '#FF6347' }   // A
+                { id: '1', symbol: 'A', color: '#FF6347' },  // A
+                { id: '8', symbol: 'SL', color: '#1E90FF' }, // SELECT
+                { id: '9', symbol: 'ST', color: '#FF69B4' }  // START
             ];
         }
         

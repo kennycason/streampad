@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>StreamPad</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="streampad.css">
 </head>
 <body>
     <!-- DDR View -->
@@ -12,43 +12,43 @@
         <div class="ddr-lanes">
             <div class="ddr-lane" data-button="14">
                 <div class="lane-track" id="track-14"></div>
-                <div class="lane-button" data-color="#FF1493">◀</div>
+                <div class="lane-button" data-color="#FF1493">&#9664;</div>
             </div>
             <div class="ddr-lane" data-button="12">
                 <div class="lane-track" id="track-12"></div>
-                <div class="lane-button" data-color="#00FFFF">▲</div>
+                <div class="lane-button" data-color="#00FFFF">&#9650;</div>
             </div>
             <div class="ddr-lane" data-button="15">
                 <div class="lane-track" id="track-15"></div>
-                <div class="lane-button" data-color="#32CD32">▶</div>
+                <div class="lane-button" data-color="#32CD32">&#9654;</div>
             </div>
             <div class="ddr-lane" data-button="13">
                 <div class="lane-track" id="track-13"></div>
-                <div class="lane-button" data-color="#FFD700">▼</div>
+                <div class="lane-button" data-color="#FFD700">&#9660;</div>
             </div>
-            <div class="ddr-lane" data-button="4">
-                <div class="lane-track" id="track-4"></div>
-                <div class="lane-button" data-color="#FF4500">L1</div>
-            </div>
-            <div class="ddr-lane" data-button="5">
-                <div class="lane-track" id="track-5"></div>
-                <div class="lane-button" data-color="#9400D3">R1</div>
-            </div>
-            <div class="ddr-lane" data-button="2">
-                <div class="lane-track" id="track-2"></div>
-                <div class="lane-button" data-color="#FFFF00">Y</div>
-            </div>
-            <div class="ddr-lane" data-button="3">
-                <div class="lane-track" id="track-3"></div>
-                <div class="lane-button" data-color="#4169E1">X</div>
+            <div class="ddr-lane" data-button="1">
+                <div class="lane-track" id="track-1"></div>
+                <div class="lane-button" data-color="#FF6347">A</div>
             </div>
             <div class="ddr-lane" data-button="0">
                 <div class="lane-track" id="track-0"></div>
                 <div class="lane-button" data-color="#00FF7F">B</div>
             </div>
-            <div class="ddr-lane" data-button="1">
-                <div class="lane-track" id="track-1"></div>
-                <div class="lane-button" data-color="#FF6347">A</div>
+            <div class="ddr-lane" data-button="3">
+                <div class="lane-track" id="track-3"></div>
+                <div class="lane-button" data-color="#4169E1">X</div>
+            </div>
+            <div class="ddr-lane" data-button="2">
+                <div class="lane-track" id="track-2"></div>
+                <div class="lane-button" data-color="#FFFF00">Y</div>
+            </div>
+            <div class="ddr-lane" data-button="4">
+                <div class="lane-track" id="track-4"></div>
+                <div class="lane-button" data-color="#FF4500">L</div>
+            </div>
+            <div class="ddr-lane" data-button="5">
+                <div class="lane-track" id="track-5"></div>
+                <div class="lane-button" data-color="#9400D3">R</div>
             </div>
             <div class="ddr-lane" data-button="8">
                 <div class="lane-track" id="track-8"></div>
@@ -61,12 +61,14 @@
         </div>
     </div>
 
+    <!-- Starfield canvas for background effect -->
+    <canvas id="starfield"></canvas>
+
     <!-- Hidden status indicator for controller detection -->
     <div class="status-indicator" id="statusIndicator" style="display: none;">
         <div class="status-dot"></div>
     </div>
 
-
-    <script src="script.js"></script>
+    <script src="streampad.js"></script>
 </body>
 </html>
