@@ -2,7 +2,7 @@
 
 A web-based controller input visualizer that displays real-time button presses in a DDR/Guitar Hero style with colorful scrolling rectangles.
 
-![DDR Controller Logger](screenshot.png)
+![DDR Controller Logger](screenshot3.png)
 ![DDR Controller Logger](screenshot1.png)
 ![DDR Controller Logger](screenshot2.png)
 
@@ -70,6 +70,7 @@ streampad.html?lightning=true&lightningMaxAngle=50
 streampad.html?stars=true&glow=true&spacing=10&pulse=true&flash=true&rainbow=true&scanlines=true&matrix=true&vaporwave=true
 ```
 
+My primary config
 ```
 /streampad.html?stars=true&glow=true&spacing=10&pulse=true&flash=true&rainbow=true&scanlines=true&matrix=true&vaporwave=true&lightning=true&lightningMaxAngle=55&matrixPreserveOrder=true&matrixCharsMaxSize=32&matrixSpeed=1&matrixChars=サムスがマザーブレインをミサイルで破壊した。ハイパービームが全てを消し去る。スペースジャンプで無限に飛べ。スクリューアタックで敵を粉砕。パワーボムで部屋が震える。リドリーが炎を吐いてくる。クレイドの腹を撃ち抜け。ドレイゴンを凍らせて粉砕。メトロイドがエネルギーを吸い取る。惑星ゼーベスが崩壊する脱出せよ。最後のメトロイドが平和のために犠牲になった。銀河最強の賞金稼ぎサムスアラン。鳥人族の遺産が目覚める。マリディアの深海で何かが待っているノルフェアの溶岩が全てを飲み込む
 ```
