@@ -9,6 +9,7 @@ class EffectsEngine {
         this.starfieldCtx = this.starfieldCanvas ? this.starfieldCanvas.getContext('2d') : null;
         this.stars = [];
         this.matrixDrops = [];
+        this.lightning = new LightningEngine();
         this.applyEffects();
     }
 
@@ -30,6 +31,12 @@ class EffectsEngine {
         const spacing = this.params.get('spacing');
         if (spacing !== null) {
             document.documentElement.style.setProperty('--lane-spacing', spacing + 'px');
+        }
+
+        // Lightning effect: ?lightning=true, ?lightningMaxAngle=25
+        if (enableAll || this.params.get('lightning') === 'true') {
+            const maxAngle = parseInt(this.params.get('lightningMaxAngle')) || 25;
+            this.lightning.enable(Math.max(1, Math.min(90, maxAngle)));
         }
 
         // Stars/starfield background - enabled by default, disable with ?stars=false
@@ -98,34 +105,485 @@ class EffectsEngine {
         const resize = () => {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
+            // Recalculate columns on resize
+            const newCols = Math.floor(canvas.width / maxSize);
+            while (this.matrixDrops.length < newCols) this.matrixDrops.push(0);
+            this.matrixDrops.length = newCols;
         };
+
+        // Parse params
+        const speed = Math.max(1, Math.min(100, parseInt(this.params.get('matrixSpeed')) || 20));
+        const charsParam = this.params.get('matrixChars');
+        const chars = charsParam ? [...charsParam] : [...'ABXY0123456789@#$%&*<>[]{}'];
+        const maxSize = Math.max(8, Math.min(72, parseInt(this.params.get('matrixCharsMaxSize')) || 14));
+
         resize();
         window.addEventListener('resize', resize);
 
-        const columns = Math.floor(canvas.width / 14);
+        const columns = Math.floor(canvas.width / maxSize);
         this.matrixDrops = new Array(columns).fill(0);
-        const chars = 'ABXY0123456789@#$%&*<>[]{}';
+        const preserveOrder = this.params.get('matrixPreserveOrder') === 'true';
+        // Each column gets its own character index, starting at a random offset
+        const colCharIndex = new Array(columns).fill(0).map(() => Math.floor(Math.random() * chars.length));
+
+        // speed=1 is very slow, speed=100 is original fast. Map to frame skip.
+        // At speed=100, run every frame. At speed=1, run every ~6 frames.
+        const frameInterval = Math.max(1, Math.round(6 - (speed / 100) * 5));
+        let frameCount = 0;
 
         const animate = () => {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            frameCount++;
+            if (frameCount % frameInterval === 0) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            ctx.fillStyle = 'rgba(0, 255, 100, 0.4)';
-            ctx.font = '12px monospace';
+                ctx.fillStyle = 'rgba(0, 255, 100, 0.4)';
+                ctx.font = `${maxSize}px monospace`;
 
-            for (let i = 0; i < this.matrixDrops.length; i++) {
-                const char = chars[Math.floor(Math.random() * chars.length)];
-                ctx.fillText(char, i * 14, this.matrixDrops[i] * 14);
+                for (let i = 0; i < this.matrixDrops.length; i++) {
+                    let char;
+                    if (preserveOrder) {
+                        if (colCharIndex[i] === undefined) colCharIndex[i] = Math.floor(Math.random() * chars.length);
+                        char = chars[colCharIndex[i] % chars.length] || ' ';
+                        colCharIndex[i]++;
+                    } else {
+                        char = chars[Math.floor(Math.random() * chars.length)] || ' ';
+                    }
+                    if (!char || char === 'undefined') char = ' ';
+                    ctx.fillText(char, i * maxSize, this.matrixDrops[i] * maxSize);
 
-                if (this.matrixDrops[i] * 14 > canvas.height && Math.random() > 0.975) {
-                    this.matrixDrops[i] = 0;
+                    if (this.matrixDrops[i] * maxSize > canvas.height && Math.random() > 0.975) {
+                        this.matrixDrops[i] = 0;
+                        // Reset to a new random start position in the sequence
+                        if (preserveOrder) colCharIndex[i] = Math.floor(Math.random() * chars.length);
+                    }
+                    this.matrixDrops[i]++;
                 }
-                this.matrixDrops[i]++;
             }
 
             requestAnimationFrame(animate);
         };
         animate();
+    }
+}
+
+
+// ===== LIGHTNING ENGINE =====
+// Ghostbusters-style persistent energy beams that lock onto notes and chain between them.
+// While a button is held, electricity crackles around the button and beams track rising notes.
+class LightningEngine {
+    constructor() {
+        this.canvas = document.getElementById('lightning');
+        this.ctx = this.canvas ? this.canvas.getContext('2d') : null;
+        this.enabled = false;
+        this.activeBeams = new Map(); // buttonId -> beam state
+        this.fadeBolts = []; // One-shot fading bolts (release flash)
+        this.maxAngle = 25; // degrees - default jitter angle for stochastic segments
+        this.lanes = {};
+        this.noteColors = {};
+
+        if (this.canvas && this.ctx) {
+            const resize = () => {
+                this.canvas.width = window.innerWidth;
+                this.canvas.height = window.innerHeight;
+            };
+            resize();
+            window.addEventListener('resize', resize);
+            this.animate();
+        }
+    }
+
+    enable(maxAngle) {
+        this.enabled = true;
+        if (maxAngle !== undefined) this.maxAngle = maxAngle;
+    }
+
+    setRefs(lanes, noteColors) {
+        this.lanes = lanes;
+        this.noteColors = noteColors;
+    }
+
+    // Called on button press - start a persistent beam
+    startBeam(buttonId) {
+        if (!this.enabled) return;
+        this.activeBeams.set(buttonId, { startTime: Date.now() });
+    }
+
+    // Called on button release - stop the beam, leave a fading flash
+    endBeam(buttonId) {
+        if (!this.enabled) return;
+        const beam = this.activeBeams.get(buttonId);
+        if (beam && beam.lastSegments) {
+            this.fadeBolts.push({
+                segments: beam.lastSegments,
+                color: this.noteColors[buttonId] || '#fff',
+                life: 1.0
+            });
+        }
+        this.activeBeams.delete(buttonId);
+    }
+
+    // Get all visible note rectangles in viewport coords with full corner info
+    getActiveNoteRects() {
+        const rects = [];
+        for (const note of document.querySelectorAll('.ddr-note')) {
+            const r = note.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+                rects.push({
+                    x: r.left + r.width / 2, y: r.top + r.height / 2,
+                    w: r.width, h: r.height,
+                    left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                    corners: [
+                        { x: r.left, y: r.top },       // TL
+                        { x: r.right, y: r.top },      // TR
+                        { x: r.right, y: r.bottom },   // BR
+                        { x: r.left, y: r.bottom }      // BL
+                    ]
+                });
+            }
+        }
+        return rects;
+    }
+
+    // Get the 4 corners of a button element
+    getButtonCorners(btnRect) {
+        return [
+            { x: btnRect.left, y: btnRect.top },
+            { x: btnRect.right, y: btnRect.top },
+            { x: btnRect.right, y: btnRect.bottom },
+            { x: btnRect.left, y: btnRect.bottom }
+        ];
+    }
+
+    // Find the closest corner of a rect to a given point
+    closestCorner(corners, px, py) {
+        let best = corners[0], bestDist = Infinity;
+        for (const c of corners) {
+            const d = Math.hypot(c.x - px, c.y - py);
+            if (d < bestDist) { bestDist = d; best = c; }
+        }
+        return best;
+    }
+
+    // Find the corner index
+    cornerIndex(corners, corner) {
+        for (let i = 0; i < corners.length; i++) {
+            if (corners[i].x === corner.x && corners[i].y === corner.y) return i;
+        }
+        return 0;
+    }
+
+    // Generate stochastic path that hugs the perimeter of a rectangle
+    // Walks from arriveCorner around the edges with jitter, exits at exitCorner
+    generatePerimeterPath(rect, arriveCornerIdx, exitCornerIdx) {
+        const corners = rect.corners;
+        const segments = [];
+        const maxAngleRad = (this.maxAngle * Math.PI) / 180;
+
+        // Walk around the perimeter from arrive to exit (shortest direction)
+        let idx = arriveCornerIdx;
+        const steps = [];
+
+        // Try both directions, pick shorter
+        let cwSteps = 0, ccwSteps = 0;
+        let ti = arriveCornerIdx;
+        while (ti !== exitCornerIdx) { ti = (ti + 1) % 4; cwSteps++; }
+        ti = arriveCornerIdx;
+        while (ti !== exitCornerIdx) { ti = (ti + 3) % 4; ccwSteps++; }
+
+        const dir = cwSteps <= ccwSteps ? 1 : 3; // 1=CW, 3=CCW
+        const totalEdges = Math.min(cwSteps, ccwSteps);
+
+        // If arrive === exit, walk the full perimeter
+        const edgeCount = totalEdges === 0 ? 4 : totalEdges;
+
+        let cur = corners[arriveCornerIdx];
+        for (let e = 0; e < edgeCount; e++) {
+            const nextIdx = (idx + dir) % 4;
+            const next = corners[nextIdx];
+
+            // Walk this edge with stochastic jitter
+            const edgeDist = Math.hypot(next.x - cur.x, next.y - cur.y);
+            const edgeSteps = Math.max(2, Math.floor(edgeDist / 10));
+            const edgeAngle = Math.atan2(next.y - cur.y, next.x - cur.x);
+            const perpAngle = edgeAngle + Math.PI / 2;
+
+            let prev = cur;
+            for (let s = 1; s <= edgeSteps; s++) {
+                const t = s / edgeSteps;
+                const baseX = cur.x + (next.x - cur.x) * t;
+                const baseY = cur.y + (next.y - cur.y) * t;
+
+                let jitter = 0;
+                if (s < edgeSteps) {
+                    // Jitter outward from the rect center
+                    jitter = (Math.random() - 0.3) * Math.tan(maxAngleRad) * 8;
+                }
+
+                const px = baseX + Math.cos(perpAngle) * jitter;
+                const py = baseY + Math.sin(perpAngle) * jitter;
+                segments.push({ x1: prev.x, y1: prev.y, x2: px, y2: py });
+                prev = { x: px, y: py };
+            }
+
+            idx = nextIdx;
+            cur = next;
+        }
+
+        return segments;
+    }
+
+    // Generate a stochastic beam path from point A to point B (free space jump)
+    generateBeamPath(x1, y1, x2, y2) {
+        const maxAngleRad = (this.maxAngle * Math.PI) / 180;
+        const points = [{ x: x1, y: y1 }];
+        const dist = Math.hypot(x2 - x1, y2 - y1);
+        const segLen = 12;
+        const steps = Math.max(2, Math.floor(dist / segLen));
+        const baseAngle = Math.atan2(y2 - y1, x2 - x1);
+
+        for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const idealX = x1 + (x2 - x1) * t;
+            const idealY = y1 + (y2 - y1) * t;
+            const perpAngle = baseAngle + Math.PI / 2;
+            const wanderAmount = (Math.random() - 0.5) * 2 * Math.tan(maxAngleRad) * segLen;
+            const blend = Math.sin(t * Math.PI);
+
+            if (i < steps) {
+                points.push({
+                    x: idealX + Math.cos(perpAngle) * wanderAmount * blend,
+                    y: idealY + Math.sin(perpAngle) * wanderAmount * blend
+                });
+            } else {
+                points.push({ x: x2, y: y2 });
+            }
+        }
+
+        return points;
+    }
+
+    // Generate crackle segments hugging a rectangle's perimeter
+    generateCrackle(cx, cy, w, h, color, intensity) {
+        const segments = [];
+        const count = 3 + Math.floor(Math.random() * 3 * intensity);
+        const maxAngleRad = (this.maxAngle * Math.PI) / 180;
+
+        for (let i = 0; i < count; i++) {
+            // Pick a random start point on the perimeter
+            const perim = 2 * (w + h);
+            let d = Math.random() * perim;
+            let sx, sy, edgeAngle;
+
+            if (d < w) {                            // top edge
+                sx = cx - w/2 + d; sy = cy - h/2; edgeAngle = 0;
+            } else if (d < w + h) {                 // right edge
+                d -= w; sx = cx + w/2; sy = cy - h/2 + d; edgeAngle = Math.PI/2;
+            } else if (d < 2*w + h) {               // bottom edge
+                d -= w + h; sx = cx + w/2 - d; sy = cy + h/2; edgeAngle = Math.PI;
+            } else {                                 // left edge
+                d -= 2*w + h; sx = cx - w/2; sy = cy + h/2 - d; edgeAngle = -Math.PI/2;
+            }
+
+            // Walk along the edge with jitter for a short stretch
+            const perpAngle = edgeAngle + Math.PI / 2;
+            const walkLen = 10 + Math.random() * 25 * intensity;
+            const walkSteps = 3 + Math.floor(Math.random() * 3);
+            let px = sx, py = sy;
+
+            for (let j = 0; j < walkSteps; j++) {
+                const stepLen = walkLen / walkSteps;
+                const jitter = (Math.random() - 0.3) * Math.tan(maxAngleRad) * 6;
+                const nx = px + Math.cos(edgeAngle) * stepLen + Math.cos(perpAngle) * jitter;
+                const ny = py + Math.sin(edgeAngle) * stepLen + Math.sin(perpAngle) * jitter;
+                segments.push({ x1: px, y1: py, x2: nx, y2: ny });
+                px = nx; py = ny;
+            }
+        }
+        return segments;
+    }
+
+    animate() {
+        const ctx = this.ctx;
+
+        const loop = () => {
+            ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+            if (this.enabled) {
+                const allNotes = this.getActiveNoteRects();
+
+                // Draw active beams (held buttons)
+                for (const [buttonId, beam] of this.activeBeams) {
+                    const lane = this.lanes[buttonId];
+                    if (!lane) continue;
+
+                    const color = this.noteColors[buttonId] || '#FFFFFF';
+                    const btnRect = lane.button.getBoundingClientRect();
+                    const btnCx = btnRect.left + btnRect.width / 2;
+                    const btnCy = btnRect.top + btnRect.height / 2;
+                    const btnTop = btnRect.top;
+
+                    const holdTime = (Date.now() - beam.startTime) / 1000;
+                    const intensity = Math.min(1, holdTime * 2); // Ramp up over 0.5s
+
+                    // 1. Crackle hugging the button perimeter
+                    const crackle = this.generateCrackle(btnCx, btnCy, btnRect.width, btnRect.height, color, intensity);
+                    this.drawSegments(ctx, crackle, color, 0.6 * intensity, 6);
+
+                    // 2. Find ALL notes above this button, sorted by distance
+                    const targets = allNotes
+                        .filter(n => n.y < btnTop + 10);
+
+                    // Build ordered chain via greedy nearest-neighbor
+                    const chain = []; // Each entry: { rect, arriveCorner }
+                    const used = new Set();
+                    const btnCorners = this.getButtonCorners(btnRect);
+
+                    // Start from the button's top-center area - pick closest button corner to first note
+                    let curPos = { x: btnCx, y: btnTop };
+
+                    while (used.size < targets.length) {
+                        let best = null;
+                        let bestDist = Infinity;
+                        for (const t of targets) {
+                            if (used.has(t)) continue;
+                            // Distance from current position to nearest corner of this note
+                            const nearest = this.closestCorner(t.corners, curPos.x, curPos.y);
+                            const d = Math.hypot(nearest.x - curPos.x, nearest.y - curPos.y);
+                            if (d < bestDist) { bestDist = d; best = t; }
+                        }
+                        if (!best) break;
+                        used.add(best);
+
+                        const arriveCorner = this.closestCorner(best.corners, curPos.x, curPos.y);
+                        chain.push({ rect: best, arriveCorner });
+
+                        // Current position becomes a random corner on the far side of this note
+                        // (to encourage the beam to wrap around before jumping)
+                        const arriveIdx = this.cornerIndex(best.corners, arriveCorner);
+                        // Exit from the opposite-ish corner (2 corners away)
+                        const exitIdx = (arriveIdx + 2) % 4;
+                        curPos = best.corners[exitIdx];
+                    }
+
+                    // 3. Generate the full beam: button -> chain of notes -> off screen
+                    const allSegments = [];
+
+                    // Start from button corner closest to the first target
+                    let beamPos;
+                    if (chain.length > 0) {
+                        beamPos = this.closestCorner(btnCorners, chain[0].arriveCorner.x, chain[0].arriveCorner.y);
+                    } else {
+                        beamPos = { x: btnCx, y: btnTop };
+                    }
+
+                    for (let i = 0; i < chain.length; i++) {
+                        const { rect, arriveCorner } = chain[i];
+                        const arriveIdx = this.cornerIndex(rect.corners, arriveCorner);
+
+                        // Jump beam from current position to the arrive corner
+                        const jumpPath = this.generateBeamPath(beamPos.x, beamPos.y, arriveCorner.x, arriveCorner.y);
+                        for (let j = 0; j < jumpPath.length - 1; j++) {
+                            allSegments.push({ x1: jumpPath[j].x, y1: jumpPath[j].y, x2: jumpPath[j+1].x, y2: jumpPath[j+1].y });
+                        }
+
+                        // Pick exit corner: the one closest to the NEXT target, or opposite if last
+                        let exitIdx;
+                        if (i < chain.length - 1) {
+                            const nextArrive = chain[i + 1].arriveCorner;
+                            const exitCorner = this.closestCorner(rect.corners, nextArrive.x, nextArrive.y);
+                            exitIdx = this.cornerIndex(rect.corners, exitCorner);
+                        } else {
+                            // Last note - exit from the topmost corner
+                            exitIdx = rect.corners[0].y <= rect.corners[1].y ? 0 : 1;
+                        }
+
+                        // Flow around the rectangle perimeter from arrive to exit
+                        const perimSegs = this.generatePerimeterPath(rect, arriveIdx, exitIdx);
+                        allSegments.push(...perimSegs);
+
+                        beamPos = rect.corners[exitIdx];
+                    }
+
+                    // Continue beam off the top of the screen
+                    if (beamPos.y > -50) {
+                        const drift = (Math.random() - 0.5) * 60;
+                        const midPath = this.generateBeamPath(beamPos.x, beamPos.y, beamPos.x + drift * 0.5, beamPos.y * 0.5);
+                        for (let j = 0; j < midPath.length - 1; j++) {
+                            allSegments.push({ x1: midPath[j].x, y1: midPath[j].y, x2: midPath[j+1].x, y2: midPath[j+1].y });
+                        }
+                        const topPath = this.generateBeamPath(beamPos.x + drift * 0.5, beamPos.y * 0.5, beamPos.x + drift, -20);
+                        for (let j = 0; j < topPath.length - 1; j++) {
+                            allSegments.push({ x1: topPath[j].x, y1: topPath[j].y, x2: topPath[j+1].x, y2: topPath[j+1].y });
+                        }
+                    }
+
+                    beam.lastSegments = allSegments;
+
+                    // Draw the beam with 3 layers
+                    this.drawSegments(ctx, allSegments, color, 0.85 * intensity, 10 + intensity * 6);
+                }
+            }
+
+            // Draw fading bolts (release flashes)
+            for (let i = this.fadeBolts.length - 1; i >= 0; i--) {
+                const bolt = this.fadeBolts[i];
+                bolt.life -= 0.04;
+                if (bolt.life <= 0) {
+                    this.fadeBolts.splice(i, 1);
+                    continue;
+                }
+                this.drawSegments(ctx, bolt.segments, bolt.color, bolt.life * 0.6, 8);
+            }
+
+            requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+    }
+
+    // Draw segments with 3-layer glow: outer glow, colored mid, white core
+    drawSegments(ctx, segments, color, alpha, glowSize) {
+        if (segments.length === 0) return;
+
+        // Outer glow
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.25;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = glowSize;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = color;
+        ctx.shadowBlur = glowSize * 1.5;
+        ctx.beginPath();
+        for (const s of segments) { ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); }
+        ctx.stroke();
+        ctx.restore();
+
+        // Colored mid line
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.7;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(2, glowSize * 0.3);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        for (const s of segments) { ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); }
+        ctx.stroke();
+        ctx.restore();
+
+        // White core
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.beginPath();
+        for (const s of segments) { ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x2, s.y2); }
+        ctx.stroke();
+        ctx.restore();
     }
 }
 
@@ -603,11 +1061,22 @@ class ControllerInputLogger {
 
         this.activateButton(buttonId);
         this.createDDRNote(buttonId, timestamp);
+
+        // Start lightning beam while button is held
+        if (window.effects && window.effects.lightning) {
+            window.effects.lightning.setRefs(this.lanes, this.noteColors);
+            window.effects.lightning.startBeam(buttonId);
+        }
     }
 
     onButtonRelease(buttonId) {
         this.deactivateButton(buttonId);
         this.endDDRNote(buttonId);
+
+        // End lightning beam
+        if (window.effects && window.effects.lightning) {
+            window.effects.lightning.endBeam(buttonId);
+        }
     }
 
     activateButton(buttonId) {

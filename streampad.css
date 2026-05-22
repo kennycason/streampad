@@ -42,6 +42,17 @@ body {
     pointer-events: none;
 }
 
+/* Lightning canvas */
+#lightning {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 50;
+    pointer-events: none;
+}
+
 /* DDR View */
 .ddr-view {
     padding: 0.5rem;
