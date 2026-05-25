@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SNI Test - SNES Controller via gRPC-web</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    padding: 20px;
+    min-height: 100vh;
+  }
+  h1 { color: #00ffcc; margin-bottom: 10px; font-size: 24px; }
+  h2 { color: #ff66aa; margin: 16px 0 8px; font-size: 16px; }
+
+  .controls {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  label { color: #888; font-size: 13px; }
+  input[type="text"], select {
+    background: #1a1a2e; color: #00ffcc; border: 1px solid #333;
+    padding: 6px 10px; border-radius: 4px; font-family: inherit; font-size: 13px;
+  }
+  input[type="text"] { width: 260px; }
+  select { min-width: 200px; }
+  button {
+    background: #1a1a2e; color: #00ffcc; border: 1px solid #00ffcc;
+    padding: 6px 14px; border-radius: 4px; cursor: pointer;
+    font-family: inherit; font-size: 13px; transition: all 0.15s;
+  }
+  button:hover { background: #00ffcc; color: #0a0a0a; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.stop { border-color: #ff4466; color: #ff4466; }
+  button.stop:hover { background: #ff4466; color: #0a0a0a; }
+
+  #status {
+    padding: 8px 12px; border-radius: 4px; margin-bottom: 16px;
+    font-size: 13px; border-left: 3px solid #444;
+  }
+  #status.ok { border-color: #00ff88; color: #00ff88; }
+  #status.error { border-color: #ff4466; color: #ff4466; }
+  #status.info { border-color: #4488ff; color: #4488ff; }
+
+  .game-info {
+    padding: 8px 12px; border-radius: 4px; margin-bottom: 16px;
+    font-size: 13px; border-left: 3px solid #ffaa00; color: #ffaa00;
+  }
+
+  .controller-display {
+    display: inline-block; background: #111; border: 2px solid #333;
+    border-radius: 16px; padding: 30px 40px; margin: 16px 0;
+    position: relative;
+  }
+  .btn-row {
+    display: flex; gap: 8px; align-items: center; justify-content: center;
+    margin: 8px 0;
+  }
+  .btn-group { display: flex; gap: 6px; align-items: center; margin: 0 16px; }
+
+  .snes-btn {
+    width: 38px; height: 38px; border-radius: 50%; display: flex;
+    align-items: center; justify-content: center; font-size: 11px;
+    font-weight: bold; border: 2px solid #333; background: #1a1a1a;
+    color: #555; transition: all 0.08s;
+  }
+  .snes-btn.dpad { border-radius: 4px; width: 32px; height: 32px; }
+  .snes-btn.shoulder { border-radius: 8px; width: 50px; height: 28px; font-size: 12px; }
+  .snes-btn.small { border-radius: 10px; width: 34px; height: 20px; font-size: 9px; }
+
+  .snes-btn.pressed {
+    border-color: #fff;
+    color: #fff;
+    box-shadow: 0 0 12px var(--btn-color, #00ffcc), inset 0 0 8px var(--btn-color, #00ffcc);
+    background: color-mix(in srgb, var(--btn-color, #00ffcc) 30%, #1a1a1a);
+  }
+
+  .dpad-grid {
+    display: grid;
+    grid-template-columns: 32px 32px 32px;
+    grid-template-rows: 32px 32px 32px;
+    gap: 2px;
+  }
+  .dpad-grid .snes-btn { margin: 0; }
+  .dpad-empty { width: 32px; height: 32px; }
+
+  .face-grid {
+    display: grid;
+    grid-template-columns: 38px 38px 38px;
+    grid-template-rows: 38px 38px 38px;
+    gap: 2px;
+  }
+  .face-grid .snes-btn { margin: 0; }
+  .face-empty { width: 38px; height: 38px; }
+
+  .raw-data {
+    margin-top: 16px; padding: 10px; background: #0d0d1a;
+    border: 1px solid #222; border-radius: 6px; font-size: 12px;
+  }
+  .raw-data .hex { color: #ffaa00; font-size: 14px; letter-spacing: 2px; }
+  .raw-data .bits { color: #888; font-size: 11px; margin-top: 4px; }
+
+  #log {
+    margin-top: 16px; padding: 10px; background: #0d0d1a;
+    border: 1px solid #222; border-radius: 6px; font-size: 11px;
+    max-height: 200px; overflow-y: auto; white-space: pre-wrap;
+    color: #666;
+  }
+  #log .log-error { color: #ff4466; }
+  #log .log-ok { color: #00ff88; }
+  #log .log-info { color: #4488ff; }
+
+  .hz-display { color: #ffaa00; font-size: 13px; margin-left: 12px; }
+</style>
+</head>
+<body>
+
+<h1>SNI gRPC-web Test</h1>
+<p style="color:#666; margin-bottom:16px; font-size:13px;">
+  Read SNES controller input from hardware via SNI (gRPC-web on port 8190)
+</p>
+
+<div class="controls">
+  <label>SNI URL:</label>
+  <input type="text" id="sniUrl" value="http://localhost:8190">
+  <button id="btnListDevices" onclick="listDevices()">List Devices</button>
+</div>
+
+<div class="controls">
+  <label>Device:</label>
+  <select id="deviceSelect"><option value="">-- click List Devices --</option></select>
+  <button id="btnStart" onclick="startPolling()" disabled>Start Reading</button>
+  <button id="btnStop" class="stop" onclick="stopPolling()" disabled>Stop</button>
+  <span class="hz-display" id="hzDisplay"></span>
+</div>
+
+<div id="status" class="info">Not connected</div>
+<div class="game-info" id="gameInfo" style="display:none;"></div>
+
+<div class="controller-display">
+  <!-- Shoulder buttons -->
+  <div class="btn-row" style="margin-bottom: 12px;">
+    <div class="btn-group">
+      <div class="snes-btn shoulder" id="btn-L" style="--btn-color:#ff8800;">L</div>
+    </div>
+    <div style="width: 100px;"></div>
+    <div class="btn-group">
+      <div class="snes-btn shoulder" id="btn-R" style="--btn-color:#ff8800;">R</div>
+    </div>
+  </div>
+
+  <!-- Main row: D-pad + face buttons -->
+  <div class="btn-row">
+    <!-- D-pad -->
+    <div class="btn-group">
+      <div class="dpad-grid">
+        <div class="dpad-empty"></div>
+        <div class="snes-btn dpad" id="btn-Up" style="--btn-color:#44aaff;">&#9650;</div>
+        <div class="dpad-empty"></div>
+        <div class="snes-btn dpad" id="btn-Left" style="--btn-color:#44aaff;">&#9664;</div>
+        <div class="dpad-empty"></div>
+        <div class="snes-btn dpad" id="btn-Right" style="--btn-color:#44aaff;">&#9654;</div>
+        <div class="dpad-empty"></div>
+        <div class="snes-btn dpad" id="btn-Down" style="--btn-color:#44aaff;">&#9660;</div>
+        <div class="dpad-empty"></div>
+      </div>
+    </div>
+
+    <!-- Select / Start -->
+    <div class="btn-group" style="flex-direction: column; gap: 6px; margin: 0 20px;">
+      <div class="snes-btn small" id="btn-Select" style="--btn-color:#888;">SEL</div>
+      <div class="snes-btn small" id="btn-Start" style="--btn-color:#888;">STA</div>
+    </div>
+
+    <!-- Face buttons -->
+    <div class="btn-group">
+      <div class="face-grid">
+        <div class="face-empty"></div>
+        <div class="snes-btn" id="btn-X" style="--btn-color:#4488ff;">X</div>
+        <div class="face-empty"></div>
+        <div class="snes-btn" id="btn-Y" style="--btn-color:#44cc44;">Y</div>
+        <div class="face-empty"></div>
+        <div class="snes-btn" id="btn-A" style="--btn-color:#ff4444;">A</div>
+        <div class="face-empty"></div>
+        <div class="snes-btn" id="btn-B" style="--btn-color:#ffcc00;">B</div>
+        <div class="face-empty"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="raw-data">
+  <div>Raw: <span class="hex" id="rawHex">--</span></div>
+  <div class="bits" id="rawBits">hi: --------   lo: --------</div>
+</div>
+
+<h2>Log</h2>
+<div id="log"></div>
+
+<script>
+// ============================================================
+// Minimal Protobuf encoder/decoder
+// ============================================================
+
+const WIRE_VARINT = 0;
+const WIRE_LEN = 2;
+
+function encodeVarint(value) {
+  const bytes = [];
+  value = value >>> 0;
+  do {
+    let byte = value & 0x7f;
+    value >>>= 7;
+    if (value > 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (value > 0);
+  return bytes;
+}
+
+function encodeTaggedVarint(field, value) {
+  return [...encodeVarint((field << 3) | WIRE_VARINT), ...encodeVarint(value)];
+}
+
+function encodeTaggedString(field, str) {
+  const encoded = new TextEncoder().encode(str);
+  return [
+    ...encodeVarint((field << 3) | WIRE_LEN),
+    ...encodeVarint(encoded.length),
+    ...encoded
+  ];
+}
+
+function encodeTaggedBytes(field, bytes) {
+  return [
+    ...encodeVarint((field << 3) | WIRE_LEN),
+    ...encodeVarint(bytes.length),
+    ...bytes
+  ];
+}
+
+function readVarint(data, pos) {
+  let result = 0, shift = 0;
+  while (pos < data.length) {
+    const byte = data[pos++];
+    result |= (byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) break;
+    shift += 7;
+    if (shift > 35) throw new Error('Varint too long');
+  }
+  return [result >>> 0, pos];
+}
+
+function decodeFields(data) {
+  const fields = [];
+  let pos = 0;
+  while (pos < data.length) {
+    const [tag, p1] = readVarint(data, pos);
+    pos = p1;
+    const fieldNum = tag >>> 3;
+    const wireType = tag & 0x7;
+    let value;
+    switch (wireType) {
+      case 0: // varint
+        [value, pos] = readVarint(data, pos);
+        break;
+      case 1: // 64-bit
+        value = data.slice(pos, pos + 8); pos += 8;
+        break;
+      case 2: { // length-delimited
+        const [len, p2] = readVarint(data, pos);
+        pos = p2;
+        value = data.slice(pos, pos + len);
+        pos += len;
+        break;
+      }
+      case 5: // 32-bit
+        value = data.slice(pos, pos + 4); pos += 4;
+        break;
+      default:
+        return fields; // stop on unknown wire type
+    }
+    fields.push({ fieldNum, wireType, value });
+  }
+  return fields;
+}
+
+// ============================================================
+// gRPC-web transport
+// ============================================================
+
+async function grpcWebCall(url, servicePath, requestBytes, quiet) {
+  const frame = new Uint8Array(5 + requestBytes.length);
+  frame[0] = 0x00;
+  new DataView(frame.buffer).setUint32(1, requestBytes.length, false);
+  frame.set(requestBytes, 5);
+
+  const fullUrl = url.replace(/\/$/, '') + '/' + servicePath;
+  if (!quiet) log(`POST ${servicePath}`, 'info');
+
+  const response = await fetch(fullUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/grpc-web+proto',
+      'X-Grpc-Web': '1',
+    },
+    body: frame,
+  });
+
+  // Check for gRPC error in response headers
+  const grpcStatus = response.headers.get('Grpc-Status');
+  const grpcMessage = response.headers.get('Grpc-Message');
+  if (grpcStatus && grpcStatus !== '0') {
+    throw new Error(`gRPC error ${grpcStatus}: ${grpcMessage ? decodeURIComponent(grpcMessage) : 'unknown'}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  const responseBuffer = await response.arrayBuffer();
+  const responseBytes = new Uint8Array(responseBuffer);
+
+  // Parse gRPC frames
+  const frames = [];
+  let pos = 0;
+  while (pos < responseBytes.length) {
+    if (pos + 5 > responseBytes.length) break;
+    const flags = responseBytes[pos];
+    const length = new DataView(responseBytes.buffer, pos + 1, 4).getUint32(0, false);
+    pos += 5;
+    if (pos + length > responseBytes.length) break;
+    const payload = responseBytes.slice(pos, pos + length);
+    pos += length;
+
+    if (flags & 0x80) {
+      // Trailers frame
+      const trailerText = new TextDecoder().decode(payload);
+      const status = trailerText.match(/grpc-status:\s*(\d+)/);
+      const message = trailerText.match(/grpc-message:\s*(.+)/);
+      if (status && status[1] !== '0') {
+        throw new Error(`gRPC error ${status[1]}: ${message ? decodeURIComponent(message[1].trim()) : 'unknown'}`);
+      }
+    } else {
+      frames.push(payload);
+    }
+  }
+  return frames;
+}
+
+// ============================================================
+// SNI Client
+// ============================================================
+
+// SNI gRPC service paths (NO package prefix - confirmed via testing)
+const SVC_DEVICES = 'Devices/ListDevices';
+const SVC_SINGLE_READ = 'DeviceMemory/SingleRead';
+const SVC_MAPPING_DETECT = 'DeviceMemory/MappingDetect';
+
+// SNI proto field numbers (confirmed via gRPC reflection):
+//
+// ReadMemoryRequest:
+//   field 1: uint32  requestAddress
+//   field 2: enum    requestAddressSpace (0=FxPakPro, 1=SnesABus)
+//   field 3: uint32  size
+//   field 4: enum    requestMemoryMapping (0=Unknown, 1=HiROM, 2=LoROM)
+//
+// ReadMemoryResponse:
+//   field 1: uint32  requestAddress
+//   field 3: uint32  deviceAddress
+//   field 5: bytes   data
+
+let detectedMapping = 0;
+let gameTitle = '';
+// FxPakPro WRAM base = $F50000 (maps to SNES $7E:0000)
+const FXPAK_WRAM_BASE = 0xF50000;
+// Default joypad WRAM offset (Super Metroid held buttons at $7E:008D)
+let joypadOffset = 0x8D;
+
+async function sniListDevices() {
+  const url = document.getElementById('sniUrl').value;
+  const frames = await grpcWebCall(url, SVC_DEVICES, new Uint8Array(0));
+
+  const devices = [];
+  for (const frame of frames) {
+    for (const f of decodeFields(frame)) {
+      if (f.fieldNum === 1 && f.wireType === WIRE_LEN) {
+        const device = {};
+        for (const df of decodeFields(f.value)) {
+          if (df.fieldNum === 1 && df.wireType === WIRE_LEN) device.uri = new TextDecoder().decode(df.value);
+          if (df.fieldNum === 2 && df.wireType === WIRE_LEN) device.displayName = new TextDecoder().decode(df.value);
+          if (df.fieldNum === 3 && df.wireType === WIRE_LEN) device.kind = new TextDecoder().decode(df.value);
+        }
+        devices.push(device);
+      }
+    }
+  }
+  return devices;
+}
+
+async function sniDetectMapping(deviceUri) {
+  const url = document.getElementById('sniUrl').value;
+  const reqBytes = new Uint8Array(encodeTaggedString(1, deviceUri));
+  try {
+    const frames = await grpcWebCall(url, SVC_MAPPING_DETECT, reqBytes);
+    for (const frame of frames) {
+      for (const f of decodeFields(frame)) {
+        if (f.fieldNum === 2 && f.wireType === WIRE_VARINT) {
+          const mappingNames = { 0: 'Unknown', 1: 'HiROM', 2: 'LoROM', 3: 'ExHiROM' };
+          detectedMapping = f.value;
+          log(`Detected mapping: ${mappingNames[f.value] || f.value}`, 'ok');
+          return f.value;
+        }
+      }
+    }
+  } catch (e) {
+    log(`MappingDetect: ${e.message}`, 'error');
+  }
+  return 0;
+}
+
+async function sniReadMemory(deviceUri, address, size, quiet) {
+  const url = document.getElementById('sniUrl').value;
+
+  // ReadMemoryRequest with FxPakPro address space (0)
+  const readReqBytes = [
+    ...encodeTaggedVarint(1, address),   // requestAddress
+    ...encodeTaggedVarint(2, 0),         // FxPakPro address space
+    ...encodeTaggedVarint(3, size),      // size (field 3!)
+  ];
+
+  const singleReqBytes = new Uint8Array([
+    ...encodeTaggedString(1, deviceUri),
+    ...encodeTaggedBytes(2, readReqBytes),
+  ]);
+
+  const frames = await grpcWebCall(url, SVC_SINGLE_READ, singleReqBytes, quiet);
+
+  // ReadMemoryResponse: field 5 = bytes data
+  for (const frame of frames) {
+    for (const f of decodeFields(frame)) {
+      if (f.fieldNum === 2 && f.wireType === WIRE_LEN) {
+        for (const rf of decodeFields(f.value)) {
+          if (rf.fieldNum === 5 && rf.wireType === WIRE_LEN) {
+            return rf.value;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+async function detectGame(deviceUri) {
+  // Read ROM title from LoROM header ($007FC0) and HiROM header ($00FFC0)
+  const loHeader = await sniReadMemory(deviceUri, 0x007FC0, 21, true);
+  if (loHeader) {
+    const title = new TextDecoder('ascii', { fatal: false }).decode(loHeader).trim();
+    // Check if it looks like a valid ASCII title
+    if (title.length > 2 && /^[\x20-\x7E]+$/.test(title)) {
+      return title;
+    }
+  }
+  const hiHeader = await sniReadMemory(deviceUri, 0x00FFC0, 21, true);
+  if (hiHeader) {
+    const title = new TextDecoder('ascii', { fatal: false }).decode(hiHeader).trim();
+    if (title.length > 2 && /^[\x20-\x7E]+$/.test(title)) {
+      return title;
+    }
+  }
+  return 'Unknown';
+}
+
+// Known joypad WRAM offsets per game (held buttons, 2 bytes, little-endian)
+// Format matches $4218/$4219: lo=A/X/L/R, hi=B/Y/Sel/Sta/DPad
+const GAME_JOYPAD_OFFSETS = {
+  'Super Metroid':   0x8B, // $7E:008B-008C (newly pressed) -- 008D for held
+  'ALTTP':           0xF0, // $7E:00F0
+};
+
+function getJoypadOffset(title) {
+  for (const [game, offset] of Object.entries(GAME_JOYPAD_OFFSETS)) {
+    if (title.includes(game)) return offset;
+  }
+  // Generic fallback: try $7E:008B (works for many games)
+  return 0x8B;
+}
+
+// ============================================================
+// UI Logic
+// ============================================================
+
+let polling = false;
+let pollTimer = null;
+let frameCount = 0;
+let lastHzTime = 0;
+
+async function listDevices() {
+  setStatus('Connecting to SNI...', 'info');
+  try {
+    const devices = await sniListDevices();
+    log(`Found ${devices.length} device(s)`, 'ok');
+
+    const select = document.getElementById('deviceSelect');
+    select.innerHTML = '';
+    if (devices.length === 0) {
+      select.innerHTML = '<option value="">No devices found</option>';
+      setStatus('No devices found. Is a game running?', 'error');
+      return;
+    }
+
+    for (const dev of devices) {
+      const opt = document.createElement('option');
+      opt.value = dev.uri;
+      opt.textContent = `${dev.displayName || dev.kind || 'Device'} (${dev.uri})`;
+      select.appendChild(opt);
+      log(`  ${dev.uri} - ${dev.displayName} [${dev.kind}]`, 'info');
+    }
+
+    document.getElementById('btnStart').disabled = false;
+    setStatus(`Found ${devices.length} device(s)`, 'ok');
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'error');
+    log(`ListDevices failed: ${e.message}`, 'error');
+  }
+}
+
+async function startPolling() {
+  const uri = document.getElementById('deviceSelect').value;
+  if (!uri) { setStatus('Select a device first', 'error'); return; }
+
+  // Detect mapping and game
+  setStatus('Detecting game...', 'info');
+  await sniDetectMapping(uri);
+  gameTitle = await detectGame(uri);
+  joypadOffset = getJoypadOffset(gameTitle);
+
+  const infoEl = document.getElementById('gameInfo');
+  infoEl.style.display = 'block';
+  infoEl.textContent = `Game: ${gameTitle} | Joypad WRAM: $7E:${joypadOffset.toString(16).padStart(4, '0').toUpperCase()} | Address space: FxPakPro`;
+  log(`Game: "${gameTitle}", reading joypad at WRAM $7E:${joypadOffset.toString(16).padStart(4, '0')}`, 'ok');
+
+  polling = true;
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('btnStop').disabled = false;
+  frameCount = 0;
+  lastHzTime = performance.now();
+  setStatus(`Reading joypad from ${gameTitle}...`, 'ok');
+  pollLoop(uri);
+}
+
+function stopPolling() {
+  polling = false;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  document.getElementById('btnStart').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  document.getElementById('hzDisplay').textContent = '';
+  setStatus('Stopped', 'info');
+  log('Stopped polling', 'info');
+}
+
+async function pollLoop(uri) {
+  if (!polling) return;
+  try {
+    // Read 2 bytes of joypad data from WRAM via FxPakPro address space
+    const data = await sniReadMemory(uri, FXPAK_WRAM_BASE + joypadOffset, 2, true);
+    if (data) updateDisplay(data);
+
+    frameCount++;
+    const now = performance.now();
+    const elapsed = now - lastHzTime;
+    if (elapsed >= 1000) {
+      const hz = (frameCount / (elapsed / 1000)).toFixed(1);
+      document.getElementById('hzDisplay').textContent = `${hz} Hz`;
+      frameCount = 0;
+      lastHzTime = now;
+    }
+  } catch (e) {
+    log(`Read error: ${e.message}`, 'error');
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  if (polling) {
+    pollTimer = setTimeout(() => pollLoop(uri), 16);
+  }
+}
+
+// ============================================================
+// Joypad bit decoding & display
+// ============================================================
+
+// SNES joypad register layout (little-endian in WRAM):
+// byte 0 (lo, equiv $4218): A(7) X(6) L(5) R(4) -(3) -(2) -(1) -(0)
+// byte 1 (hi, equiv $4219): B(7) Y(6) Select(5) Start(4) Up(3) Down(2) Left(1) Right(0)
+
+const BUTTON_MAP = {
+  'B':      [1, 7],
+  'Y':      [1, 6],
+  'Select': [1, 5],
+  'Start':  [1, 4],
+  'Up':     [1, 3],
+  'Down':   [1, 2],
+  'Left':   [1, 1],
+  'Right':  [1, 0],
+  'A':      [0, 7],
+  'X':      [0, 6],
+  'L':      [0, 5],
+  'R':      [0, 4],
+};
+
+function updateDisplay(data) {
+  if (!data || data.length < 2) return;
+
+  const lo = data[0];
+  const hi = data[1];
+
+  document.getElementById('rawHex').textContent =
+    `$${hi.toString(16).padStart(2, '0').toUpperCase()} $${lo.toString(16).padStart(2, '0').toUpperCase()}`;
+
+  const hiBits = hi.toString(2).padStart(8, '0');
+  const loBits = lo.toString(2).padStart(8, '0');
+  document.getElementById('rawBits').textContent =
+    `hi: ${hiBits} (B Y Sel Sta U D L R)   lo: ${loBits} (A X L R - - - -)`;
+
+  for (const [name, [byteIdx, bit]] of Object.entries(BUTTON_MAP)) {
+    const val = byteIdx === 0 ? lo : hi;
+    const pressed = (val >> bit) & 1;
+    const el = document.getElementById(`btn-${name}`);
+    if (el) el.classList.toggle('pressed', !!pressed);
+  }
+}
+
+// ============================================================
+// Logging & status
+// ============================================================
+
+function setStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = type || '';
+}
+
+function log(msg, type) {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  if (type) line.className = `log-${type}`;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  while (el.children.length > 200) el.removeChild(el.firstChild);
+}
+
+log('Ready. Click "List Devices" to connect to SNI.', 'info');
+</script>
+</body>
+</html>
