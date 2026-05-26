@@ -588,6 +588,244 @@ class LightningEngine {
 }
 
 
+// ===== SNI gRPC-web CLIENT =====
+// Reads SNES controller input from real hardware via SNI's gRPC-web interface.
+// SNI exposes gRPC-web on port 8190 by default.
+// Since $4218 (joypad registers) can't be read directly via FxPak Pro cart bus,
+// we read the game's joypad mirror in WRAM (FxPakPro address space $F50000+offset).
+
+class SNIClient {
+    constructor(logger) {
+        this.logger = logger;
+        this.params = new URLSearchParams(window.location.search);
+        this.url = this.params.get('sniUrl') || 'http://localhost:8190';
+        this.deviceUri = null;
+        this.polling = false;
+        this.pollTimer = null;
+        this.lastButtons = 0;
+        // FxPakPro WRAM base (maps to SNES $7E:0000)
+        this.FXPAK_WRAM = 0xF50000;
+        // Default joypad offset - will be auto-detected from ROM title
+        this.joypadOffset = 0x8B;
+        // SNES button bit layout (16-bit LE from WRAM):
+        // lo byte ($4218): A(7) X(6) L(5) R(4)
+        // hi byte ($4219): B(7) Y(6) Sel(5) Sta(4) Up(3) Down(2) Left(1) Right(0)
+        this.SNI_BUTTON_MAP = {
+            'B':  { byte: 1, bit: 7, laneId: '0' },
+            'Y':  { byte: 1, bit: 6, laneId: '2' },
+            'Sel':{ byte: 1, bit: 5, laneId: '8' },
+            'Sta':{ byte: 1, bit: 4, laneId: '9' },
+            'Up': { byte: 1, bit: 3, laneId: '12' },
+            'Dn': { byte: 1, bit: 2, laneId: '13' },
+            'Lt': { byte: 1, bit: 1, laneId: '14' },
+            'Rt': { byte: 1, bit: 0, laneId: '15' },
+            'A':  { byte: 0, bit: 7, laneId: '1' },
+            'X':  { byte: 0, bit: 6, laneId: '3' },
+            'L':  { byte: 0, bit: 5, laneId: '4' },
+            'R':  { byte: 0, bit: 4, laneId: '5' },
+        };
+    }
+
+    // --- Minimal protobuf encoder ---
+    _varint(val) {
+        const out = [];
+        val = val >>> 0;
+        do { let b = val & 0x7f; val >>>= 7; if (val > 0) b |= 0x80; out.push(b); } while (val > 0);
+        return out;
+    }
+    _tagVarint(f, v) { return [...this._varint((f << 3) | 0), ...this._varint(v)]; }
+    _tagString(f, s) {
+        const b = new TextEncoder().encode(s);
+        return [...this._varint((f << 3) | 2), ...this._varint(b.length), ...b];
+    }
+    _tagBytes(f, b) { return [...this._varint((f << 3) | 2), ...this._varint(b.length), ...b]; }
+
+    // --- Minimal protobuf decoder ---
+    _readVarint(data, pos) {
+        let r = 0, s = 0;
+        while (pos < data.length) {
+            const b = data[pos++]; r |= (b & 0x7f) << s;
+            if (!(b & 0x80)) break; s += 7;
+        }
+        return [r >>> 0, pos];
+    }
+    _decodeFields(data) {
+        const fields = []; let pos = 0;
+        while (pos < data.length) {
+            const [tag, p1] = this._readVarint(data, pos); pos = p1;
+            const fn = tag >>> 3, wt = tag & 7;
+            let val;
+            if (wt === 0) { [val, pos] = this._readVarint(data, pos); }
+            else if (wt === 2) { const [len, p2] = this._readVarint(data, pos); pos = p2; val = data.slice(pos, pos + len); pos += len; }
+            else if (wt === 1) { val = data.slice(pos, pos + 8); pos += 8; }
+            else if (wt === 5) { val = data.slice(pos, pos + 4); pos += 4; }
+            else return fields;
+            fields.push({ fn, wt, val });
+        }
+        return fields;
+    }
+
+    // --- gRPC-web transport ---
+    async _grpc(path, reqBytes, quiet) {
+        const frame = new Uint8Array(5 + reqBytes.length);
+        frame[0] = 0x00;
+        new DataView(frame.buffer).setUint32(1, reqBytes.length, false);
+        frame.set(reqBytes, 5);
+
+        const resp = await fetch(`${this.url}/${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/grpc-web+proto', 'X-Grpc-Web': '1' },
+            body: frame,
+        });
+
+        const gs = resp.headers.get('Grpc-Status');
+        const gm = resp.headers.get('Grpc-Message');
+        if (gs && gs !== '0') throw new Error(`gRPC ${gs}: ${gm ? decodeURIComponent(gm) : ''}`);
+
+        const buf = new Uint8Array(await resp.arrayBuffer());
+        const frames = [];
+        let p = 0;
+        while (p + 5 <= buf.length) {
+            const flags = buf[p];
+            const len = new DataView(buf.buffer, p + 1, 4).getUint32(0, false);
+            p += 5;
+            if (p + len > buf.length) break;
+            const payload = buf.slice(p, p + len); p += len;
+            if (flags & 0x80) {
+                const txt = new TextDecoder().decode(payload);
+                const st = txt.match(/grpc-status:\s*(\d+)/);
+                const msg = txt.match(/grpc-message:\s*(.+)/);
+                if (st && st[1] !== '0') throw new Error(`gRPC ${st[1]}: ${msg ? decodeURIComponent(msg[1].trim()) : ''}`);
+            } else {
+                frames.push(payload);
+            }
+        }
+        return frames;
+    }
+
+    // --- SNI API calls ---
+    async listDevices() {
+        const frames = await this._grpc('Devices/ListDevices', new Uint8Array(0));
+        const devices = [];
+        for (const frame of frames) {
+            for (const f of this._decodeFields(frame)) {
+                if (f.fn === 1 && f.wt === 2) {
+                    const dev = {};
+                    for (const df of this._decodeFields(f.val)) {
+                        if (df.fn === 1 && df.wt === 2) dev.uri = new TextDecoder().decode(df.val);
+                        if (df.fn === 2 && df.wt === 2) dev.displayName = new TextDecoder().decode(df.val);
+                        if (df.fn === 3 && df.wt === 2) dev.kind = new TextDecoder().decode(df.val);
+                    }
+                    devices.push(dev);
+                }
+            }
+        }
+        return devices;
+    }
+
+    async readMemory(addr, size) {
+        // ReadMemoryRequest: field1=address, field2=addrSpace(0=FxPakPro), field3=size
+        const readReq = [...this._tagVarint(1, addr), ...this._tagVarint(2, 0), ...this._tagVarint(3, size)];
+        const req = new Uint8Array([...this._tagString(1, this.deviceUri), ...this._tagBytes(2, readReq)]);
+        const frames = await this._grpc('DeviceMemory/SingleRead', req, true);
+        for (const frame of frames) {
+            for (const f of this._decodeFields(frame)) {
+                if (f.fn === 2 && f.wt === 2) {
+                    for (const rf of this._decodeFields(f.val)) {
+                        if (rf.fn === 5 && rf.wt === 2) return rf.val;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    async detectGame() {
+        const header = await this.readMemory(0x007FC0, 21);
+        if (header) {
+            const title = new TextDecoder('ascii', { fatal: false }).decode(header).replace(/[^\x20-\x7E]/g, '').trim();
+            if (title.length > 2) return title;
+        }
+        const hiHeader = await this.readMemory(0x00FFC0, 21);
+        if (hiHeader) {
+            const title = new TextDecoder('ascii', { fatal: false }).decode(hiHeader).replace(/[^\x20-\x7E]/g, '').trim();
+            if (title.length > 2) return title;
+        }
+        return 'Unknown';
+    }
+
+    getJoypadOffset(title) {
+        // Known joypad held-buttons WRAM offsets
+        if (title.includes('Super Metroid')) return 0x8B;
+        if (title.includes('LINK') || title.includes('ZELDA')) return 0xF0;
+        return 0x8B; // reasonable default for many games
+    }
+
+    // --- Connect and start polling ---
+    async connect() {
+        console.log(`[SNI] Connecting to ${this.url}...`);
+        const devices = await this.listDevices();
+        if (devices.length === 0) throw new Error('No SNI devices found. Is a game running?');
+
+        this.deviceUri = devices[0].uri;
+        console.log(`[SNI] Connected: ${devices[0].displayName} (${devices[0].kind})`);
+
+        const game = await this.detectGame();
+        this.joypadOffset = this.getJoypadOffset(game);
+        console.log(`[SNI] Game: "${game}" | Joypad WRAM: $7E:${this.joypadOffset.toString(16).padStart(4, '0')}`);
+
+        // Build SNES-style lanes
+        this.logger.gamepadType = 'snes-sni';
+        this.logger.rebuildLanesForController();
+
+        this.polling = true;
+        this.lastButtons = 0;
+        this.pollLoop();
+    }
+
+    async pollLoop() {
+        if (!this.polling) return;
+        try {
+            const data = await this.readMemory(this.FXPAK_WRAM + this.joypadOffset, 2);
+            if (data && data.length >= 2) {
+                const buttons = data[0] | (data[1] << 8);
+                this.processButtons(buttons);
+            }
+        } catch (e) {
+            console.warn('[SNI] Read error:', e.message);
+            await new Promise(r => setTimeout(r, 500));
+        }
+        if (this.polling) {
+            this.pollTimer = setTimeout(() => this.pollLoop(), 16);
+        }
+    }
+
+    processButtons(buttons) {
+        const now = Date.now();
+        const changed = buttons ^ this.lastButtons;
+        if (changed === 0) return;
+
+        for (const [name, { byte: byteIdx, bit, laneId }] of Object.entries(this.SNI_BUTTON_MAP)) {
+            const bitPos = byteIdx * 8 + bit;
+            if (!(changed & (1 << bitPos))) continue;
+
+            const pressed = !!(buttons & (1 << bitPos));
+            if (pressed) {
+                this.logger.onButtonPress(laneId, now);
+            } else {
+                this.logger.onButtonRelease(laneId);
+            }
+        }
+        this.lastButtons = buttons;
+    }
+
+    stop() {
+        this.polling = false;
+        if (this.pollTimer) { clearTimeout(this.pollTimer); this.pollTimer = null; }
+    }
+}
+
+
 // ===== CONTROLLER INPUT LOGGER =====
 class ControllerInputLogger {
     constructor() {
@@ -617,6 +855,7 @@ class ControllerInputLogger {
             '2': '#FFFF00', '3': '#4169E1', '0': '#00FF7F', '1': '#FF6347'
         };
 
+        this.sniClient = null;
         this.init();
     }
 
@@ -630,8 +869,21 @@ class ControllerInputLogger {
 
     initializeComponents() {
         this.cacheElements();
-        this.setupGamepadSupport();
-        this.startMainLoop();
+
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('sni') === 'true') {
+            // SNI mode: read from real SNES hardware via gRPC-web
+            this.sniClient = new SNIClient(this);
+            this.sniClient.connect().catch(e => {
+                console.error('[SNI] Connection failed:', e.message);
+            });
+            // Still start the main loop for note animations
+            this.startMainLoop();
+        } else {
+            // Standard mode: browser Gamepad API
+            this.setupGamepadSupport();
+            this.startMainLoop();
+        }
     }
 
     cacheElements() {
@@ -663,7 +915,23 @@ class ControllerInputLogger {
 
         let laneConfig;
 
-        if (this.gamepadType === 'switch-pro') {
+        if (this.gamepadType === 'snes-sni') {
+            // Real SNES via SNI - same layout as snes-switch but no ZL/ZR
+            laneConfig = [
+                { id: '14', symbol: '\u25C0', color: '#FF1493' },
+                { id: '12', symbol: '\u25B2', color: '#00FFFF' },
+                { id: '15', symbol: '\u25B6', color: '#32CD32' },
+                { id: '13', symbol: '\u25BC', color: '#FFD700' },
+                { id: '1', symbol: 'A', color: '#FF6347' },
+                { id: '0', symbol: 'B', color: '#00FF7F' },
+                { id: '3', symbol: 'X', color: '#4169E1' },
+                { id: '2', symbol: 'Y', color: '#FFFF00' },
+                { id: '4', symbol: 'L', color: '#FF4500' },
+                { id: '5', symbol: 'R', color: '#9400D3' },
+                { id: '8', symbol: 'SL', color: '#1E90FF' },
+                { id: '9', symbol: 'ST', color: '#FF69B4' }
+            ];
+        } else if (this.gamepadType === 'switch-pro') {
             laneConfig = [
                 { id: '14', symbol: '\u25C0', color: '#FF1493' },
                 { id: '12', symbol: '\u25B2', color: '#00FFFF' },
@@ -857,6 +1125,7 @@ class ControllerInputLogger {
     }
 
     updateGamepad() {
+        if (this.sniClient) return; // SNI mode handles input via its own polling
         if (this.gamepadIndex === null || !this.currentControllerConfig) return;
 
         const gamepad = navigator.getGamepads()[this.gamepadIndex];
@@ -1183,6 +1452,7 @@ class ControllerInputLogger {
         this.lastGamepadState = {};
         this.hatReleaseTimers.forEach(timer => clearTimeout(timer));
         this.hatReleaseTimers.clear();
+        if (this.sniClient) this.sniClient.lastButtons = 0;
         this.activeNotes.forEach((noteData, buttonId) => this.endDDRNote(buttonId));
 
         document.querySelectorAll('.lane-button.active').forEach(button => {

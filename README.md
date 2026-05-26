@@ -44,6 +44,15 @@ All effects are applied via URL query parameters.
 | `lightningMaxAngle` | `?lightningMaxAngle=15` | Max jitter angle in degrees for lightning beam segments (default: 25, range: 1-90). Lower = tighter beam, higher = wilder arcs. |
 | `all` | `?all=true` | Enable all effects at once |
 
+### SNI (Real SNES Hardware)
+
+| Parameter | Example | Description |
+|-----------|---------|-------------|
+| `sni` | `?sni=true` | Read controller input from real SNES hardware via [SNI](https://github.com/alttpo/sni) gRPC-web. Requires SNI running and a game loaded on FXPak Pro. |
+| `sniUrl` | `?sniUrl=http://localhost:8190` | Custom SNI gRPC-web URL (default: `http://localhost:8190`) |
+
+> **Note:** SNI mode requires serving via a local HTTP server (e.g. `python -m http.server 8000`) due to CORS. Open `http://localhost:8000/streampad.html?sni=true` instead of using `file://`.
+
 ### Background
 
 | Parameter | Example | Description |
@@ -68,6 +77,11 @@ streampad.html?spacing=8&lightning=true&pulse=true
 streampad.html?lightning=true&lightningMaxAngle=10&glow=true
 streampad.html?lightning=true&lightningMaxAngle=50
 streampad.html?stars=true&glow=true&spacing=10&pulse=true&flash=true&rainbow=true&scanlines=true&matrix=true&vaporwave=true
+```
+
+SNI mode (real SNES hardware via FXPak Pro):
+```
+http://localhost:8000/streampad.html?sni=true&lightning=true
 ```
 
 My primary config
